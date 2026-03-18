@@ -20,7 +20,7 @@ No API key or external packages needed.
 
 PRODUCT_NAME    = "DaemonIQ"
 PRODUCT_TAGLINE = "Linux Troubleshooting Assistant"
-PRODUCT_VERSION = "0.1.0"
+PRODUCT_VERSION = "0.2.0"
 CLI_COMMAND     = "daemoniq"
 DAEMON_LABEL    = "daemoniq-daemon"
 AI_PERSONA      = PRODUCT_NAME

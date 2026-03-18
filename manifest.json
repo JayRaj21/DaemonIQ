@@ -1,6 +1,6 @@
 {
-  "version": "0.1.0",
-  "released": "2025-03-18",
+  "version": "0.2.0",
+  "released": "2026-03-18",
   "variants": {
     "daemoniq-cloud.py":  "daemoniq-cloud.py",
     "daemoniq-light.py":  "daemoniq-light.py",
@@ -8,5 +8,5 @@
   },
   "install_script": "install.sh",
   "min_python": "3.8",
-  "changelog": "- Initial release"
+  "changelog": "- Added first-run setup wizard (Cloud / Light / Heavy selection)\n- Added distro selection step with auto-detection from /etc/os-release\n- Added hardware scanner (lspci, lsusb, lsmod, dmesg, DKMS, nvidia-smi)\n- Added daemoniq hardware command\n- Added deep driver knowledge (GPU, Wi-Fi, audio, DKMS, Secure Boot, firmware)\n- Added version control system (daemoniq version, update, rollback)\n- Added daemoniq uninstall command for clean self-removal\n- Simplified installer — silent install, one optional prompt\n- Connected update system to JayRaj21/DaemonIQ on GitHub\n- Fixed NameError: import os missing before hardware snapshot definition"
 }
