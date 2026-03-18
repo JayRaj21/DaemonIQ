@@ -20,7 +20,7 @@ No API key or external packages needed.
 
 PRODUCT_NAME    = "DaemonIQ"
 PRODUCT_TAGLINE = "Linux Troubleshooting Assistant"
-PRODUCT_VERSION = "0.2.0"
+PRODUCT_VERSION = "0.2.1"
 CLI_COMMAND     = "daemoniq"
 DAEMON_LABEL    = "daemoniq-daemon"
 AI_PERSONA      = PRODUCT_NAME
@@ -1597,7 +1597,7 @@ def run_setup():
 
 # Remote URL where the version manifest is hosted.
 # Update this to your real repo URL before publishing.
-UPDATE_BASE_URL = "https://raw.githubusercontent.com/JayRaj21/DaemonIQ/main"
+UPDATE_BASE_URL = "https://raw.githubusercontent.com/JayRaj21/DaemonIQ/master"
 
 VERSION_FILE    = os.path.join(INSTALL_DIR, "version.json")
 BACKUP_DIR      = os.path.join(INSTALL_DIR, "backups")

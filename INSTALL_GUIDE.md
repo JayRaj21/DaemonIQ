@@ -24,7 +24,7 @@ or a version below 3.8, see [Installing Python](#installing-python) below.
 Open a terminal and paste this:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JayRaj21/DaemonIQ/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JayRaj21/DaemonIQ/master/install.sh | bash
 ```
 
 The installer will:

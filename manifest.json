@@ -1,12 +1,12 @@
 {
-  "version": "0.2.0",
+  "version": "0.2.1",
   "released": "2026-03-18",
   "variants": {
-    "daemoniq-cloud.py":  "daemoniq-cloud.py",
-    "daemoniq-light.py":  "daemoniq-light.py",
-    "daemoniq-heavy.py":  "daemoniq-heavy.py"
+    "daemoniq-cloud.py": "daemoniq-cloud.py",
+    "daemoniq-light.py": "daemoniq-light.py",
+    "daemoniq-heavy.py": "daemoniq-heavy.py"
   },
   "install_script": "install.sh",
   "min_python": "3.8",
-  "changelog": "- Added first-run setup wizard (Cloud / Light / Heavy selection)\n- Added distro selection step with auto-detection from /etc/os-release\n- Added hardware scanner (lspci, lsusb, lsmod, dmesg, DKMS, nvidia-smi)\n- Added daemoniq hardware command\n- Added deep driver knowledge (GPU, Wi-Fi, audio, DKMS, Secure Boot, firmware)\n- Added version control system (daemoniq version, update, rollback)\n- Added daemoniq uninstall command for clean self-removal\n- Simplified installer — silent install, one optional prompt\n- Connected update system to JayRaj21/DaemonIQ on GitHub\n- Fixed NameError: import os missing before hardware snapshot definition"
+  "changelog": "- Added first-run setup wizard (Cloud / Light / Heavy selection)\n- Added distro selection step with auto-detection from /etc/os-release\n- Added hardware scanner (lspci, lsusb, lsmod, dmesg, DKMS, nvidia-smi)\n- Added daemoniq hardware command\n- Added deep driver knowledge (GPU, Wi-Fi, audio, DKMS, Secure Boot, firmware)\n- Added version control system (daemoniq version, update, rollback)\n- Added daemoniq uninstall command for clean self-removal\n- Simplified installer \u2014 silent install, one optional prompt\n- Connected update system to JayRaj21/DaemonIQ on GitHub\n- Fixed NameError: import os missing before hardware snapshot definition\n- Fixed GitHub branch URL (main \u2192 master)"
 }

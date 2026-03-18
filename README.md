@@ -11,7 +11,7 @@ Paste an error message. Get a diagnosis, a fix, and optionally have it apply the
 Open a terminal and run this:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JayRaj21/DaemonIQ/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JayRaj21/DaemonIQ/master/install.sh | bash
 ```
 
 Then open a **new terminal** and type:
