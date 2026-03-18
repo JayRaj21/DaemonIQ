@@ -1597,7 +1597,7 @@ def run_setup():
 
 # Remote URL where the version manifest is hosted.
 # Update this to your real repo URL before publishing.
-UPDATE_BASE_URL = "https://raw.githubusercontent.com/YOUR_REPO/main"
+UPDATE_BASE_URL = "https://raw.githubusercontent.com/JayRaj21/DaemonIQ/main"
 
 VERSION_FILE    = os.path.join(INSTALL_DIR, "version.json")
 BACKUP_DIR      = os.path.join(INSTALL_DIR, "backups")

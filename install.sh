@@ -2,7 +2,7 @@
 # DaemonIQ installer — silent, single command
 #
 # Recommended:
-#   curl -fsSL https://raw.githubusercontent.com/YOUR_REPO/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/JayRaj21/DaemonIQ/main/install.sh | bash
 #
 # Local install (files already downloaded):
 #   bash install.sh
@@ -11,7 +11,7 @@ set -euo pipefail
 PRODUCT="DaemonIQ"
 CLI="daemoniq"
 DAEMON_LABEL="daemoniq-daemon"
-BASE_URL="https://raw.githubusercontent.com/YOUR_REPO/main"
+BASE_URL="https://raw.githubusercontent.com/JayRaj21/DaemonIQ/main"
 
 R='\033[0m'; BOLD='\033[1m'; DIM='\033[2m'
 GREEN='\033[38;5;82m'; YELLOW='\033[38;5;220m'
