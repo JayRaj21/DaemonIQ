@@ -10,7 +10,7 @@ set -euo pipefail
 
 PRODUCT="DaemonIQ"
 CLI="daemoniq"
-DAEMON_LABEL="daemoniq-daemon"
+DAEMON_LABEL="daemoniq-demon"
 BASE_URL="https://raw.githubusercontent.com/JayRaj21/DaemonIQ/master"
 
 R='\033[0m'; BOLD='\033[1m'; DIM='\033[2m'
@@ -28,12 +28,14 @@ BIN_DIR="$HOME/.local/bin"
 LAUNCHER="$BIN_DIR/${CLI}"
 
 # ── Banner ────────────────────────────────────────────────────────────────────
-echo -e "${GREEN}${BOLD}"
-echo '  ____  __ _  ___  __ __  ___  ____  __  ___'
-echo ' |    \|  | ||  _||  V  ||   ||  _ \|  ||   |'
-echo ' |  D  |     ||  _||  V  || | ||    /|  || | |'
-echo ' |____/|__|__||___||__|__||___||_|\_\|__||___|'
-echo -e "${R}${DIM}  Linux Troubleshooting Assistant${R}"
+echo -e "${RED}${BOLD}"
+echo ' .-*-.   ██████╗  █████╗ ███████╗███╗   ███╗ ██████╗ ███╗   ██╗██╗ ██████╗   .-*-. '
+echo '/  |  \\  ██╔══██╗██╔══██╗██╔════╝████╗ ████║██╔═══██╗████╗  ██║██║██╔═══██╗  /  |  \\'
+echo '| /|\ |  ██║  ██║███████║█████╗  ██╔████╔██║██║   ██║██╔██╗ ██║██║██║   ██║  | /|\ |'
+echo '|/ | \|  ██║  ██║██╔══██║██╔══╝  ██║╚██╔╝██║██║   ██║██║╚██╗██║██║██║▄▄ ██║  |/ | \|'
+echo ' \   /   ██████╔╝██║  ██║███████╗██║ ╚═╝ ██║╚██████╔╝██║ ╚████║██║╚██████╔╝   \   / '
+echo '  (o)     ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝ ╚══▀▀═╝    (o)  '
+echo -e "${R}${DIM}  * Linux Troubleshooting Assistant *${R}"
 echo ""
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -70,7 +72,7 @@ hdr "Installing ${PRODUCT}"
 mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 
 INSTALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-install.sh}")" 2>/dev/null && pwd || echo ".")"
-SCRIPTS=("daemoniq-cloud.py" "daemoniq-light.py" "daemoniq-heavy.py")
+SCRIPTS=("daemoniq-imp.py" "daemoniq-sovereign.py")
 INSTALLED=0
 
 _download() {
@@ -120,15 +122,15 @@ CONFIG="\$INSTALL_DIR/config.json"
 
 # First run — no config yet, launch setup wizard
 if [ ! -f "\$CONFIG" ] && [[ "\${1:-}" != "setup" ]] && [[ "\${1:-}" != "_daemon_bg" ]] && [[ "\${1:-}" != "_daemon_fg" ]]; then
-    exec python3 "\$INSTALL_DIR/daemoniq-light.py" setup
+    exec python3 "\$INSTALL_DIR/daemoniq-imp.py" setup
 fi
 
 # Read active script from config
 ACTIVE=\$(python3 -c "
 import json
-try:    print(json.load(open('\$CONFIG')).get('active_script','daemoniq-light.py'))
-except: print('daemoniq-light.py')
-" 2>/dev/null || echo "daemoniq-light.py")
+try:    print(json.load(open('\$CONFIG')).get('active_script','daemoniq-imp.py'))
+except: print('daemoniq-imp.py')
+" 2>/dev/null || echo "daemoniq-imp.py")
 
 SCRIPT="\$INSTALL_DIR/\$ACTIVE"
 [ ! -f "\$SCRIPT" ] && { echo "Error: \$SCRIPT not found. Run: ${CLI} setup"; exit 1; }
@@ -169,7 +171,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 if command -v systemctl &>/dev/null && [ "${EUID:-$(id -u)}" -ne 0 ]; then
     hdr "Auto-start on login (optional)"
-    read -r -p "  Start DaemonIQ automatically when you log in? [y/N] " ans
+    read -r -p "  Start DaemonIQ automatically when you log in? [y/n] " ans
     if [[ "${ans:-}" =~ ^[Yy]$ ]]; then
         SVCDIR="$HOME/.config/systemd/user"
         mkdir -p "$SVCDIR"
@@ -203,6 +205,14 @@ fi
 echo ""
 echo -e "${GREEN}${BOLD}  ✓ DaemonIQ installed!${R}"
 echo ""
-echo -e "  Open a new terminal, then type ${CYAN}${BOLD}daemoniq${R}"
-echo -e "  The setup wizard will guide you through the rest."
+
+# Add to PATH for this session so we can run setup immediately
+export PATH="$BIN_DIR:$PATH"
+
+echo -e "  Starting setup wizard...${R}"
+echo ""
+python3 "$INSTALL_DIR/daemoniq-imp.py" setup
+
+echo ""
+echo -e "${GREEN}${BOLD}  Ready. Run ${CYAN}daemoniq${GREEN} in a new terminal to start.${R}"
 echo ""

@@ -1,196 +1,164 @@
 # DaemonIQ
 
-**A Linux troubleshooting assistant that lives in your terminal.**
+A Linux troubleshooting assistant that runs as a background demon on your machine. Describe a problem in plain English — it diagnoses it, suggests a fix, and can apply the fix if you ask it to. It runs as a background demon, always ready.
 
-Paste an error message. Get a diagnosis, a fix, and optionally have it apply the fix for you.
+No cloud API. No account required. Runs entirely on your hardware using a local AI model via [Ollama](https://ollama.com).
 
 ---
 
-## Install
-
-Open a terminal and run this:
+## Installation
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/JayRaj21/DaemonIQ/master/install.sh | bash
 ```
 
-Then open a **new terminal** and type:
+Open a new terminal when it finishes, then run `daemoniq`. A short setup wizard runs on first launch to choose between Imp (lighter, 4GB+ RAM) and Demon (best quality, 9GB+ RAM).
+
+No `curl`? See [INSTALL_GUIDE.md](INSTALL_GUIDE.md).
+
+---
+
+## Usage
+
+Start an interactive session:
 
 ```bash
 daemoniq
 ```
 
-The setup wizard will walk you through the rest.
+Ask a single question without opening a session:
 
-> **Don't have `curl`?** See the [Installation Guide](INSTALL_GUIDE.md) for alternatives.
+```bash
+daemoniq "why does sudo apt upgrade keep failing?"
+```
 
----
+Ask a question and have the fix applied automatically:
 
-## What it does
+```bash
+daemoniq --exec "fix the dpkg lock error"
+```
+
+### Example session
 
 ```
-you@daemoniq:~$ sudo apt upgrade gives "dpkg was interrupted, you must manually run..."
-```
-```
-⚠ Diagnosis: dpkg was interrupted mid-install, leaving the package database in a broken state.
+you@daemoniq:~$ apt gives "dpkg was interrupted, you must manually run dpkg --configure -a"
 
-→ Fix: Run dpkg --configure -a to finish any interrupted installs, then retry.
+⚠ Diagnosis: a previous package operation was interrupted before it could finish,
+  leaving dpkg in an inconsistent state.
 
+→ Fix:
   $ sudo dpkg --configure -a
-  $ sudo apt upgrade
+  $ sudo apt install -f
 
-Type "run the fix" to apply this, or "exec on" to always apply fixes automatically.
+Type "run the fix" to apply this now, or "exec on" to apply fixes automatically going forward.
 ```
 
-**Other things you can ask:**
-- `"why does pip install keep failing?"`
-- `"analyze my command history for problems"`
-- `"my Wi-Fi driver disappeared after a kernel update"`
-- `"give me tips to improve my Linux workflow"`
-- `"run the fix"` — applies the last suggested fix automatically
+---
+
+## System context
+
+At startup, DaemonIQ scans your machine and carries that information into every conversation. You do not need to describe your setup — it already knows your distro, kernel, loaded drivers, GPU, network hardware, and recent kernel errors from `dmesg`.
+
+Built-in knowledge covers `apt`, `dpkg`, `pip`, `snap`, and `flatpak`; NVIDIA, AMD, and Intel GPU drivers; Wi-Fi firmware for Broadcom, Realtek, Intel, and Atheros chipsets; ALSA, PulseAudio, and PipeWire audio; DKMS workflows; Secure Boot and MOK enrollment; and firmware updates via `fwupdmgr`.
 
 ---
 
-## What it knows about your system
+## Commands
 
-DaemonIQ scans your machine at startup and carries that context into every conversation.
-You never have to tell it what GPU you have or which kernel you're running.
+### Interactive session
 
-**It automatically detects:**
-- Your Linux distro and available package managers
-- GPU, network, and audio hardware
-- Loaded kernel modules and DKMS module status
-- Recent kernel errors from `dmesg`
-- Recommended drivers (via `ubuntu-drivers` if available)
-- Your shell command history
-
-**It has built-in knowledge of:**
-- Package managers — `apt`, `dpkg`, `pip`, `snap`, `flatpak`
-- GPU drivers — NVIDIA (with DKMS), AMD, Intel
-- Wi-Fi drivers — Broadcom, Realtek, Intel, Atheros firmware
-- Audio — ALSA, PulseAudio, PipeWire, SOF firmware
-- Kernel modules — `modprobe`, blacklisting, DKMS workflows
-- Secure Boot — MOK enrollment for third-party drivers
-- Firmware updates — `fwupdmgr`, `firmware-linux-nonfree`
-
----
-
-## Command reference
-
-### Starting DaemonIQ
-
-| Command | What it does |
+| Command | Description |
 |---------|-------------|
-| `daemoniq` | Open the interactive assistant (REPL) |
-| `daemoniq "your question"` | Ask a single question and get an answer, then exit |
-| `daemoniq --exec "your question"` | Ask a question and automatically apply the suggested fix |
-| `daemoniq --session work "question"` | Ask a question in a named session (keeps separate history) |
-| `daemoniq --no-color` | Disable coloured output (useful when piping or logging) |
+| `daemoniq` | Start an interactive session |
+| `daemoniq "question"` | One-shot question, no session |
+| `daemoniq --exec "question"` | Ask and automatically apply the fix |
+| `daemoniq --session NAME "question"` | Ask within a named session |
+| `daemoniq --no-color` | Disable colour output |
 
----
+### Inside a session
 
-### Inside the interactive assistant (REPL)
-
-Once you're inside the assistant, you can type questions naturally or use these built-in commands:
-
-| Command | What it does |
+| Command | Description |
 |---------|-------------|
-| `help` | Show available REPL commands |
-| `exec on` | Automatically run fixes when the assistant suggests them |
-| `exec off` | Show suggested fixes without running them (default) |
-| `history` | Show the last 20 shell commands that were imported |
-| `clear` | Clear the current conversation so the assistant starts fresh |
-| `status` | Show whether the daemon is running and which backend is active |
-| `distro` | Show the detected distro and available package managers |
-| `exit` or `quit` | Leave the assistant (the background daemon keeps running) |
+| `exec on` | Apply fixes automatically when suggested |
+| `exec off` | Show fixes without applying them (default) |
+| `clear` | Clear conversation history for this session |
+| `history` | Show the last 20 recorded shell commands |
+| `status` | Show demon status and active backend |
+| `distro` | Show detected distro and package managers |
+| `help` | List available commands |
+| `exit` | End the session (demon continues running) |
 
----
+### Demon management
 
-### Managing the daemon
-
-DaemonIQ runs a small background process that handles conversations and keeps history between sessions.
-
-| Command | What it does |
+| Command | Description |
 |---------|-------------|
-| `daemoniq start` | Start the background daemon manually |
-| `daemoniq stop` | Stop the background daemon |
-| `daemoniq restart` | Stop and restart the daemon |
-| `daemoniq status` | Show the daemon's PID, distro, active backend, and hardware summary |
-| `daemoniq logs` | Stream the daemon log in real time (`tail -f`) |
+| `daemoniq start` | Start the demon |
+| `daemoniq stop` | Stop the demon |
+| `daemoniq restart` | Restart the demon |
+| `daemoniq status` | Show PID, distro, backend, and hardware summary |
+| `daemoniq logs` | Stream the demon log (`tail -f`) |
 
----
+### Configuration
 
-### Configuration and information
-
-| Command | What it does |
+| Command | Description |
 |---------|-------------|
-| `daemoniq setup` | Re-run the setup wizard — change your distro, backend, or model |
-| `daemoniq distro` | Show your detected Linux distro and available package managers |
-| `daemoniq hardware` | Show detected hardware, loaded drivers, and kernel errors |
-| `daemoniq history` | Print the last 50 shell commands the daemon has on record |
-| `daemoniq sessions` | List all active named sessions |
-| `daemoniq version` | Show the installed version and last update time |
-| `daemoniq update` | Check for and install the latest update |
-| `daemoniq rollback` | Restore the previous version if an update causes problems |
-| `daemoniq uninstall` | Completely remove DaemonIQ from your machine |
+| `daemoniq setup` | Re-run the setup wizard |
+| `daemoniq distro` | Show detected distro and package managers |
+| `daemoniq hardware` | Show hardware snapshot — GPU, drivers, dmesg errors |
+| `daemoniq history` | Show the last 50 recorded shell commands |
+| `daemoniq sessions` | List active named sessions |
 
----
+### Updates and maintenance
+
+| Command | Description |
+|---------|-------------|
+| `daemoniq version` | Show the installed version |
+| `daemoniq update` | Show instructions for applying a patch |
+| `daemoniq update /path/to/patch.py` | Apply a downloaded patch file |
+| `daemoniq rollback` | Restore the previous version |
+| `daemoniq uninstall` | Remove DaemonIQ from this machine |
 
 ### Sessions
 
-Sessions let you keep separate conversation histories — useful if you're working on multiple things at once.
+Sessions maintain separate conversation histories, which is useful when working across different machines or projects at once:
 
 ```bash
-daemoniq --session work "pip install is broken"
-daemoniq --session homelab "how do I open port 8080?"
-daemoniq sessions   # see all active sessions
+daemoniq --session server "nginx won't start after the last upgrade"
+daemoniq --session laptop "bluetooth keeps disconnecting"
+daemoniq sessions
 ```
 
-Each session remembers the full conversation so the assistant has context from earlier in that session. The default session is called `default`.
+The default session is named `default`.
 
 ---
 
-### Quick reference card
+## Quick reference
 
 ```
-daemoniq                          Open the assistant
-daemoniq "question"               One-shot question
-daemoniq --exec "question"        Ask + auto-apply fix
-daemoniq --session NAME "q"       Use a named session
+daemoniq                           Start a session
+daemoniq "question"                One-shot question
+daemoniq --exec "question"         Ask and apply fix
+daemoniq --session NAME "q"        Named session
 
-daemoniq setup                    Change backend / distro / model
-daemoniq start / stop / restart   Manage the background daemon
-daemoniq status                   Health check
-daemoniq logs                     Watch the daemon log
-daemoniq distro                   Show distro info
-daemoniq hardware                 Show hardware & driver snapshot
-daemoniq history                  Show recorded shell history
-daemoniq sessions                 List active sessions
-daemoniq version                  Show installed version
-daemoniq update                   Check for and install updates
-daemoniq rollback                 Restore the previous version
-daemoniq uninstall                Remove DaemonIQ from this machine
+daemoniq setup                     Re-run setup
+daemoniq start / stop / restart    Demon control
+daemoniq status / logs             Demon info
+daemoniq distro / hardware         System info
+daemoniq history / sessions        History and sessions
+daemoniq version / update          Version and patching
+daemoniq rollback / uninstall      Recovery and removal
 
-Inside the assistant:
-  exec on / off                   Toggle auto-apply
-  clear                           Reset conversation
-  history                         Show shell history
-  status / distro                 System info
-  exit                            Leave (daemon keeps running)
+In a session:
+  exec on / off    Toggle auto-apply
+  clear            Reset conversation
+  exit             End session
 ```
 
 ---
 
-## Need help installing?
+## Notes
 
-See **[INSTALL_GUIDE.md](INSTALL_GUIDE.md)** for step-by-step instructions, including:
-- What to do if the one-line install doesn't work
-- How to install Python if it's missing
-- What each setup option (Cloud / Light / Heavy) means
-- How to uninstall
-
----
-
-> **Note:** "DaemonIQ" is a working name. To rename the product, edit the `BRANDING`
-> block at the top of any variant script — all paths, prompts, and display strings
-> update automatically.
+- Requires Python 3.8+ and [Ollama](https://ollama.com)
+- Nothing is installed system-wide — all files live under `~/.daemoniq-demon/`
+- "DaemonIQ" is a working name. To rename it, edit the `BRANDING` block at the top of any variant script
+- Full installation instructions: [INSTALL_GUIDE.md](INSTALL_GUIDE.md)

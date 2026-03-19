@@ -1,122 +1,96 @@
 # DaemonIQ — Installation Guide
 
-This guide walks through installing DaemonIQ step by step. If something goes wrong,
-there is a section at the bottom for common problems.
+## Requirements
 
----
+- Linux (Debian/Ubuntu fully supported; other distros can diagnose but not auto-apply fixes)
+- Python 3.8 or newer
+- [Ollama](https://ollama.com) — installed automatically during setup if not present
 
-## Before you start
-
-DaemonIQ needs **Python 3.8 or newer**. Most Linux systems already have this.
-To check, open a terminal and run:
+Check your Python version:
 
 ```bash
 python3 --version
 ```
 
-If you see `Python 3.8` or higher, you're good. If you get "command not found"
-or a version below 3.8, see [Installing Python](#installing-python) below.
+If it is below 3.8 or missing entirely, see [Installing Python](#installing-python).
 
 ---
 
-## Option A — One command (recommended)
+## Installing
 
-Open a terminal and paste this:
+### Option A — Single command
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/JayRaj21/DaemonIQ/master/install.sh | bash
 ```
 
-The installer will:
-1. Check that Python is installed
-2. Download the DaemonIQ scripts
-3. Create a `daemoniq` command you can run from anywhere
-4. Add it to your PATH so the terminal can find it
-5. Optionally set it up to start automatically when you log in
+The script checks for Python, downloads the DaemonIQ files, creates the `daemoniq` command in `~/.local/bin`, and adds it to your PATH. The only prompt it asks is whether you want the demon to start automatically at login.
 
-When it finishes, open a **new terminal** (this is important — it reloads your PATH)
-and type `daemoniq` to start.
+When it finishes, **open a new terminal** before running `daemoniq`. This is necessary for the PATH change to take effect.
 
----
+### Option B — Manual download
 
-## Option B — Download the files manually
-
-Use this if the one-line install doesn't work, or if you prefer not to pipe scripts
-directly to bash.
-
-**Step 1:** Download these four files into the same folder:
-- `install.sh`
-- `daemoniq-cloud.py`
-- `daemoniq-heavy.py`
-- `daemoniq-light.py`
-
-**Step 2:** Open a terminal in that folder and run:
+Download `install.sh`, `daemoniq-imp.py`, and `daemoniq-sovereign.py` into the same directory, then run:
 
 ```bash
 bash install.sh
 ```
 
+The installer looks for the script files in the same directory, so no internet connection is needed.
+
 ---
 
-## First run — the setup wizard
+## First launch
 
-The first time you run `daemoniq`, it will ask you two questions:
+Running `daemoniq` for the first time starts a short setup wizard. It asks two questions.
 
-### Question 1: How much do you want to run on your own machine?
+**Question 1 — which model tier?**
 
 ```
-  1) Cloud    — Nothing runs locally. Uses the Groq API (free).
-  2) Light    — Runs on your machine. Works on most computers.
-  3) Heavy    — Runs on your machine. Best local quality.
+1) Imp      Runs on most machines with 4GB+ RAM.
+             Uses Llama 3 via Ollama (~4GB download).
+
+2) Demon   Best local quality. Needs 9GB+ RAM.
+             Uses Qwen2.5 via Ollama.
 ```
 
-**Not sure which to pick?**
+If you are unsure, choose Imp. It works on most machines and the quality is good enough for the majority of troubleshooting tasks. You can switch later with `daemoniq setup`.
 
-| | Cloud | Light | Heavy |
-|---|---|---|---|
-| Needs internet? | Yes (to answer questions) | Only to download once | Only to download once |
-| Needs an account? | Yes (free, at groq.com) | No | No |
-| Needs a powerful computer? | No | No (4GB+ RAM) | Yes (9GB+ RAM) |
-| Quality? | Best | Good | Very good |
-| Speed? | Very fast | Depends on your hardware | Slower on older hardware |
+**Question 2 — RAM size (Demon only)**
 
-→ **If you're unsure, pick Cloud (1).** It's the easiest, it's free, and it works on any computer.
+Qwen2.5 comes in several sizes. The wizard maps your RAM to the right one:
 
----
-
-### Question 2 (Cloud only): Your Groq API key
-
-Groq is the service that runs the AI model. It's free to use.
-
-1. Go to **https://console.groq.com**
-2. Click "Sign Up" — it takes about a minute and doesn't need a credit card
-3. Once logged in, click **API Keys** in the left menu
-4. Click **Create API Key**, give it any name, and copy it
-5. Paste it into the setup wizard when asked
-
-Your key looks like: `gsk_abc123...`
-
-The key is saved to your shell config so you only need to do this once.
+| Your RAM | Model used | Download size |
+|----------|-----------|---------------|
+| 8–12 GB  | qwen2.5:7b  | ~5 GB |
+| 12–24 GB | qwen2.5:14b | ~9 GB (recommended) |
+| 24 GB+   | qwen2.5:32b | ~20 GB |
+| Not sure | qwen2.5:7b  | ~5 GB |
 
 ---
 
-### Question 2 (Heavy only): How much RAM does your machine have?
+## Ollama
 
-Qwen2.5 comes in different sizes. Bigger = better quality but needs more RAM.
-Pick the one that matches your machine:
+Both Imp and Demon use Ollama to run the model locally. If Ollama is not installed, the setup wizard will offer to install it for you. To install it manually:
 
-| Choice | RAM needed | Download size |
-|--------|-----------|---------------|
-| 8–12 GB | 8 GB | ~5 GB |
-| 12–24 GB | 12 GB | ~9 GB ← recommended |
-| 24 GB+ | 24 GB | ~20 GB |
-| Not sure | — | ~5 GB (safe default) |
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+To pull a model manually instead of through the wizard:
+
+```bash
+ollama pull llama3          # Imp
+ollama pull qwen2.5:14b     # Demon — adjust tag to match your RAM
+```
+
+Ollama resumes interrupted downloads, so if a large model download fails partway through, simply run the pull command again.
 
 ---
 
-## Changing your setup later
+## Changing your setup
 
-You can always switch between Cloud, Light, and Heavy by running:
+To switch between Imp and Sovereign, change your distro selection, or swap models:
 
 ```bash
 daemoniq setup
@@ -126,129 +100,95 @@ daemoniq setup
 
 ## Installing Python
 
-If `python3 --version` says "command not found":
-
-**Ubuntu / Debian / Mint / Pop!_OS:**
+**Debian / Ubuntu / Mint / Pop!\_OS**
 ```bash
 sudo apt update && sudo apt install python3
 ```
 
-**Fedora:**
+**Fedora**
 ```bash
 sudo dnf install python3
 ```
 
-**Arch / Manjaro:**
+**Arch / Manjaro**
 ```bash
 sudo pacman -S python
 ```
 
-After installing, close and reopen your terminal, then run the DaemonIQ installer again.
-
----
-
-## Light and Heavy: installing Ollama
-
-The Light and Heavy options use **Ollama** to run AI models on your machine.
-The setup wizard will offer to install it for you automatically.
-
-If you prefer to install it yourself first:
-
-```bash
-curl -fsSL https://ollama.com/install.sh | sh
-```
-
-After installing, you can pull a model manually if you want:
-
-```bash
-ollama pull llama3        # for Light
-ollama pull qwen2.5:14b   # for Heavy (recommended size)
-```
-
-Or just let the DaemonIQ setup wizard do it for you.
+After installing, close and reopen your terminal before running the installer again.
 
 ---
 
 ## Troubleshooting
 
-**"command not found: daemoniq" after installing**
+**`command not found: daemoniq` after a successful install**
 
-The terminal needs to reload your PATH. Either:
-- Open a new terminal window, or
-- Run `source ~/.bashrc` (or `source ~/.zshrc` if you use zsh)
+The PATH change written by the installer only takes effect in new terminals. Open a new terminal window, or reload your config manually:
 
----
-
-**"Python not found" even though I just installed it**
-
-Close your terminal completely and open a new one, then try again.
-
----
-
-**The Groq key isn't working**
-
-- Make sure you copied the full key including the `gsk_` prefix
-- Check your key is still valid at https://console.groq.com/keys
-- Re-run `daemoniq setup` to enter it again
-
----
-
-**Ollama model download is very slow or fails**
-
-Large models can be several GB. If the download fails partway through, just run it again:
 ```bash
-ollama pull llama3         # Light
-ollama pull qwen2.5:14b    # Heavy
+source ~/.bashrc    # bash
+source ~/.zshrc     # zsh
 ```
-Ollama resumes interrupted downloads automatically.
 
----
+**`daemoniq` starts but immediately exits with a Python error**
 
-**"Ollama is not running"**
+Check the demon log:
 
-Start it manually:
+```bash
+daemoniq logs
+```
+
+**Ollama is not running**
+
 ```bash
 ollama serve
 ```
 
-Or set it to start automatically:
+To start it automatically on login:
+
 ```bash
 systemctl --user enable --now ollama
 ```
 
----
+**Slow or interrupted model download**
 
-**Something else went wrong**
+Run the pull command again — Ollama resumes from where it stopped:
 
-Check the DaemonIQ log for clues:
+```bash
+ollama pull llama3
+ollama pull qwen2.5:14b
+```
+
+**Something else**
+
 ```bash
 daemoniq logs
 ```
+
+The log file at `/tmp/daemoniq-demon.log` records everything the demon does and is usually the fastest way to diagnose unexpected behaviour.
 
 ---
 
 ## Uninstalling
 
-Run this single command:
-
 ```bash
 daemoniq uninstall
 ```
 
-It will ask for confirmation, then remove everything — the daemon, all scripts,
-the `daemoniq` command, the auto-start service if installed, and the PATH entry
-from your shell config. Open a new terminal afterwards and it will be fully gone.
+This stops the demon, removes all installed files, deletes the `daemoniq` command, disables the systemd service if one was created, and removes the PATH entry from your shell config. Open a new terminal afterwards to confirm the command is gone.
 
 ---
 
-## What gets installed where
+## File locations
 
-| Location | What it is |
-|----------|-----------|
-| `~/.daemoniq-daemon/` | All DaemonIQ scripts and config |
-| `~/.daemoniq-daemon/config.json` | Your setup choices (backend, model) |
-| `~/.local/bin/daemoniq` | The command you type |
-| `/tmp/daemoniq-daemon.sock` | Internal socket (deleted on reboot) |
-| `/tmp/daemoniq-daemon.log` | Log file (deleted on reboot) |
+All files are installed to your home directory. Nothing is written system-wide.
 
-Nothing is installed system-wide. Everything stays in your home directory.
+| Path | Contents |
+|------|---------|
+| `~/.daemoniq-demon/` | Scripts, config, backups, hardware snapshot |
+| `~/.daemoniq-demon/config.json` | Your setup choices |
+| `~/.daemoniq-demon/hardware_snapshot.json` | Hardware scan from last demon start |
+| `~/.daemoniq-demon/backups/` | Pre-patch backups (up to 5 per variant) |
+| `~/.local/bin/daemoniq` | The shell command |
+| `/tmp/daemoniq-demon.log` | Demon log (cleared on reboot) |
+| `/tmp/daemoniq-demon.sock` | Unix socket (cleared on reboot) |
