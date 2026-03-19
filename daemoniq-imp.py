@@ -20,18 +20,18 @@ No API key or external packages needed.
 
 PRODUCT_NAME    = "DaemonIQ"
 PRODUCT_TAGLINE = "Linux Troubleshooting Assistant"
-PRODUCT_VERSION = "0.4.1"
+PRODUCT_VERSION = "0.4.4"
 CLI_COMMAND     = "daemoniq"
 DAEMON_LABEL    = "daemoniq-demon"
 AI_PERSONA      = PRODUCT_NAME
 
 BANNER_LINES = [
-    r"       ██████╗  █████╗ ███████╗███╗   ███╗ ██████╗ ███╗   ██╗ ████╗  ██████╗      ",
-    r"       ██╔══██╗██╔══██╗██╔════╝████╗ ████║██╔═══██╗████╗  ██║  ██╔╝ ██╔═══██╗     ",
-    r"       ██║  ██║███████║█████╗  ██╔████╔██║██║   ██║██╔██╗ ██║  ██║  ██║   ██║     ",
-    r"       ██║  ██║██╔══██║██╔══╝  ██║╚██╔╝██║██║   ██║██║╚██╗██║  ██║  ██║▄▄ ██║     ",
-    r"       ██████╔╝██║  ██║███████╗██║ ╚═╝ ██║╚██████╔╝██║ ╚████║ ████║ ╚██████╔╝     ",
-    r"       ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝  ╚══╝   ╚══▀▀═╝     ",
+    r"  ██████╗  █████╗ ███████╗███╗   ███╗ ██████╗ ███╗   ██╗██████╗ ██████╗  ",
+    r"  ██╔══██╗██╔══██╗██╔════╝████╗ ████║██╔═══██╗████╗  ██║╚═██╔═╝██╔═══██╗ ",
+    r"  ██║  ██║███████║█████╗  ██╔████╔██║██║   ██║██╔██╗ ██║  ██║  ██║   ██║ ",
+    r"  ██║  ██║██╔══██║██╔══╝  ██║╚██╔╝██║██║   ██║██║╚██╗██║  ██║  ██║▄▄ ██║ ",
+    r"  ██████╔╝██║  ██║███████╗██║ ╚═╝ ██║╚██████╔╝██║ ╚████║██████╗╚██████╔╝ ",
+    r"  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝╚═════╝ ╚══▀▀═╝ ",
 ]
 
 # ── Runtime paths (all derived from DAEMON_LABEL) ────────────────────────────
@@ -977,7 +977,8 @@ if not sys.stdout.isatty():
 
 def _banner() -> str:
     RED = "\033[38;5;196m"
-    art = "\n".join(f"{RED}{l}{C.RESET}" for l in BANNER_LINES)
+    rendered = [f"{RED}{l}{C.RESET}" for l in BANNER_LINES]
+    art = chr(10).join(rendered)
     sub = f"  {C.DIM}* {PRODUCT_TAGLINE} *  --  v{PRODUCT_VERSION}{C.RESET}"
     return f"\n{art}\n{sub}\n"
 
