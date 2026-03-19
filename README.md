@@ -18,7 +18,7 @@ No `curl`? See [INSTALL_GUIDE.md](INSTALL_GUIDE.md).
 
 ---
 
-## Usage
+## How To Use It
 
 Start an interactive session:
 
