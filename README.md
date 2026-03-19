@@ -1,6 +1,6 @@
 # DaemonIQ
 
-A Linux troubleshooting assistant that runs as a background demon on your machine. Describe a problem in plain English — it diagnoses it, suggests a fix, and can apply the fix if you ask it to. It runs as a background demon, always ready.
+A Linux troubleshooting assistant that runs as a background demon on your machine. Describe a problem in plain English — it diagnoses it, suggests a fix, and can apply the fix if you ask it to. It runs as a background process, always ready.
 
 No cloud API. No account required. Runs entirely on your hardware using a local AI model via [Ollama](https://ollama.com).
 
@@ -12,13 +12,13 @@ No cloud API. No account required. Runs entirely on your hardware using a local 
 curl -fsSL https://raw.githubusercontent.com/JayRaj21/DaemonIQ/master/install.sh | bash
 ```
 
-Open a new terminal when it finishes, then run `daemoniq`. A short setup wizard runs on first launch to choose between Imp (lighter, 4GB+ RAM) and Demon (best quality, 9GB+ RAM).
+Open a new terminal when it finishes, then run `daemoniq`. A short setup wizard runs on first launch to choose between Imp (lighter, 4GB+ RAM) and Sovereign (best quality, 9GB+ RAM).
 
 No `curl`? See [INSTALL_GUIDE.md](INSTALL_GUIDE.md).
 
 ---
 
-## How To Use It
+## Usage
 
 Start an interactive session:
 
@@ -83,20 +83,20 @@ Built-in knowledge covers `apt`, `dpkg`, `pip`, `snap`, and `flatpak`; NVIDIA, A
 | `exec off` | Show fixes without applying them (default) |
 | `clear` | Clear conversation history for this session |
 | `history` | Show the last 20 recorded shell commands |
-| `status` | Show demon status and active backend |
+| `status` | Show whether the background process is running and which model is active |
 | `distro` | Show detected distro and package managers |
 | `help` | List available commands |
-| `exit` | End the session (demon continues running) |
+| `exit` | Close the interactive session (the background process keeps running) |
 
-### Demon management
+### Managing the background process
 
 | Command | Description |
 |---------|-------------|
-| `daemoniq start` | Start the demon |
-| `daemoniq stop` | Stop the demon |
-| `daemoniq restart` | Restart the demon |
+| `daemoniq start` | Start the background process manually |
+| `daemoniq stop` | Stop the background process |
+| `daemoniq restart` | Stop and restart the background process |
 | `daemoniq status` | Show PID, distro, backend, and hardware summary |
-| `daemoniq logs` | Stream the demon log (`tail -f`) |
+| `daemoniq logs` | Stream the live log output of the background process |
 
 ### Configuration
 
@@ -141,8 +141,8 @@ daemoniq --exec "question"         Ask and apply fix
 daemoniq --session NAME "q"        Named session
 
 daemoniq setup                     Re-run setup
-daemoniq start / stop / restart    Demon control
-daemoniq status / logs             Demon info
+daemoniq start / stop / restart    Start, stop, or restart the background process
+daemoniq status / logs             Check health and stream live log output
 daemoniq distro / hardware         System info
 daemoniq history / sessions        History and sessions
 daemoniq version / update          Version and patching
@@ -159,6 +159,6 @@ In a session:
 ## Notes
 
 - Requires Python 3.8+ and [Ollama](https://ollama.com)
-- Nothing is installed system-wide — all files live under `~/.daemoniq-demon/`
+- Nothing is installed system-wide — all files live under `~/.daemoniq-demon/` (the background process install directory)
 - "DaemonIQ" is a working name. To rename it, edit the `BRANDING` block at the top of any variant script
 - Full installation instructions: [INSTALL_GUIDE.md](INSTALL_GUIDE.md)
