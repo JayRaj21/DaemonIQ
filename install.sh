@@ -62,12 +62,10 @@ if [ "$PYMAJ" -lt 3 ] || { [ "$PYMAJ" -eq 3 ] && [ "$PYMIN" -lt 8 ]; }; then
     err "Python $PYVER found — ${PRODUCT} requires Python 3.8+."
     exit 1
 fi
-ok "Python $PYVER"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 2 — Download or copy scripts
 # ══════════════════════════════════════════════════════════════════════════════
-hdr "Installing ${PRODUCT}"
 
 mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 
@@ -95,11 +93,9 @@ for script in "${SCRIPTS[@]}"; do
     if [ -n "$LOCAL" ]; then
         cp "$LOCAL" "$INSTALL_DIR/$script"
         chmod +x "$INSTALL_DIR/$script"
-        ok "Installed $script"
         INSTALLED=$((INSTALLED + 1))
     elif _download "$script" "$INSTALL_DIR/$script"; then
         chmod +x "$INSTALL_DIR/$script"
-        ok "Downloaded $script"
         INSTALLED=$((INSTALLED + 1))
     else
         warn "Could not get $script — skipping"
@@ -138,12 +134,10 @@ SCRIPT="\$INSTALL_DIR/\$ACTIVE"
 exec python3 "\$SCRIPT" "\$@"
 LAUNCHER_EOF
 chmod +x "$LAUNCHER"
-ok "Created 'daemoniq' command"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 4 — PATH (silent — no prompt)
+# 4 — PATH
 # ══════════════════════════════════════════════════════════════════════════════
-hdr "Configuring PATH"
 
 SHELL_RC=""
 case "${SHELL:-}" in
@@ -152,9 +146,7 @@ case "${SHELL:-}" in
     *)      SHELL_RC="$HOME/.bashrc" ;;
 esac
 
-if [[ ":${PATH}:" == *":${BIN_DIR}:"* ]]; then
-    ok "Already in PATH"
-else
+if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then
     if [ -n "$SHELL_RC" ] && ! grep -q "local/bin" "$SHELL_RC" 2>/dev/null; then
         if [[ "${SHELL:-}" == */fish ]]; then
             echo 'fish_add_path $HOME/.local/bin' >> "$SHELL_RC"
@@ -163,14 +155,13 @@ else
         fi
     fi
     export PATH="$BIN_DIR:$PATH"
-    ok "Added ~/.local/bin to PATH in ${SHELL_RC##*/}"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 5 — Auto-start on login (one optional question)
 # ══════════════════════════════════════════════════════════════════════════════
 if command -v systemctl &>/dev/null && [ "${EUID:-$(id -u)}" -ne 0 ]; then
-    hdr "Auto-start on login (optional)"
+    echo ""
     read -r -p "  Start DaemonIQ automatically when you log in? [y/n] " ans
     if [[ "${ans:-}" =~ ^[Yy]$ ]]; then
         SVCDIR="$HOME/.config/systemd/user"
@@ -193,9 +184,6 @@ if command -v systemctl &>/dev/null && [ "${EUID:-$(id -u)}" -ne 0 ]; then
         } > "$SVCDIR/${DAEMON_LABEL}.service"
         systemctl --user daemon-reload
         systemctl --user enable "${DAEMON_LABEL}.service" 2>/dev/null || true
-        ok "Auto-start enabled"
-    else
-        info "Skipped — DaemonIQ starts on demand when you run it."
     fi
 fi
 
@@ -209,10 +197,5 @@ echo ""
 # Add to PATH for this session so we can run setup immediately
 export PATH="$BIN_DIR:$PATH"
 
-echo -e "  Starting setup wizard...${R}"
-echo ""
-python3 "$INSTALL_DIR/daemoniq-imp.py" setup
+DAEMONIQ_FRESH_INSTALL=1 python3 "$INSTALL_DIR/daemoniq-imp.py" setup
 
-echo ""
-echo -e "${GREEN}${BOLD}  Ready. Run ${CYAN}daemoniq${GREEN} in a new terminal to start.${R}"
-echo ""
