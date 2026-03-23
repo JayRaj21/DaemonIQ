@@ -81,6 +81,8 @@ Built-in knowledge covers `apt`, `dpkg`, `pip`, `snap`, and `flatpak`; NVIDIA, A
 |---------|-------------|
 | `exec on` | Apply fixes automatically when suggested |
 | `exec off` | Show fixes without applying them (default) |
+| `sandbox on` | Run fixes in a sandbox via Docker before applying (developer setting) |
+| `sandbox off` | Disable sandbox mode |
 | `clear` | Clear conversation history for this session |
 | `history` | Show the last 20 recorded shell commands |
 | `status` | Show whether the background process is running and which model is active |
@@ -149,9 +151,10 @@ daemoniq version / update          Version and patching
 daemoniq rollback / uninstall      Recovery and removal
 
 In a session:
-  exec on / off    Toggle auto-apply
-  clear            Reset conversation
-  exit             End session
+  exec on / off       Toggle auto-apply
+  sandbox on / off    [dev] Test fixes in Docker before applying
+  clear               Reset conversation
+  exit                End session
 ```
 
 ---
