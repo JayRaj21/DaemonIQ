@@ -813,7 +813,7 @@ def _execute(block: ExecBlock) -> str:
 # ── Developer sandbox ─────────────────────────────────────────────────────────
 # When dev_sandbox is enabled in config.json, exec blocks are run inside a
 # throwaway Docker container before being applied to the host.  The user sees
-# the dry-run output and must confirm before the real commands execute.
+# the test output and must confirm before the real commands execute.
 
 _SANDBOX_IMAGES = {
     "debian": "ubuntu:22.04",
@@ -833,7 +833,7 @@ def _sandbox_exec(block: ExecBlock, distro_family: str = "debian") -> tuple:
         return "✗ Docker not found — install Docker to use sandbox mode.", False
 
     image = _SANDBOX_IMAGES.get(distro_family, "ubuntu:22.04")
-    lines = [f"🧪 Sandbox dry-run: {block.description}",
+    lines = [f"Sandbox test: {block.description}",
              f"   Image: {image}", "─" * 50]
     all_ok = True
 
@@ -1357,7 +1357,7 @@ def _repl(session: str, api_key: str = "", auto_exec: bool = False):
   {C.GREEN}history{C.RESET}          Show imported shell history (last 20)
   {C.GREEN}clear{C.RESET}            Clear current session context
   {C.GREEN}exec on/off{C.RESET}      Toggle auto-execution of suggested fixes
-  {C.GREEN}sandbox on/off{C.RESET}  [dev] Dry-run fixes in Docker before applying
+  {C.GREEN}sandbox on/off{C.RESET}  [dev] Runs fixes in sandbox via Docker before applying
   {C.GREEN}exit / quit{C.RESET}      Exit REPL (demon stays running)
 
 {C.CYAN}Example prompts:{C.RESET}
@@ -1392,7 +1392,7 @@ def _repl(session: str, api_key: str = "", auto_exec: bool = False):
             cfg["dev_sandbox"] = (user_input == "sandbox on")
             _save_config(cfg)
             if cfg["dev_sandbox"]:
-                print(f"{C.GREEN}✓ Sandbox mode ON{C.RESET} — exec blocks will dry-run in Docker first")
+                print(f"{C.GREEN}✓ Sandbox mode ON{C.RESET} — exec blocks will be tested in Docker first")
                 if not shutil.which("docker"):
                     print(f"{C.YELLOW}⚠ Docker not found — install Docker for sandbox to work{C.RESET}")
             else:
@@ -1425,7 +1425,7 @@ def _repl(session: str, api_key: str = "", auto_exec: bool = False):
                 # Sandbox ran — show results and ask user to confirm
                 print(f"\n{C.GREEN}{C.BOLD}{PRODUCT_NAME}{C.RESET} {C.DGRAY}━━{C.RESET}")
                 _print_reply(r.get("reply", ""), None)
-                print(f"\n{C.CYAN}{C.BOLD}Sandbox dry-run result:{C.RESET}")
+                print(f"\n{C.CYAN}{C.BOLD}Sandbox test result:{C.RESET}")
                 for line in r.get("sandbox_output", "").splitlines():
                     print(f"  {line}")
                 icon = f"{C.GREEN}✓ passed{C.RESET}" if r.get("sandbox_passed") \
@@ -2351,7 +2351,7 @@ def main():
         _print_reply(r.get("reply",""), r.get("exec_output"))
         # Sandbox: auto-confirm if sandbox passed, skip if it failed
         if r.get("awaiting_confirm"):
-            print(f"\n{C.CYAN}Sandbox dry-run:{C.RESET}")
+            print(f"\n{C.CYAN}Sandbox test:{C.RESET}")
             for line in r.get("sandbox_output", "").splitlines():
                 print(f"  {line}")
             if r.get("sandbox_passed"):
