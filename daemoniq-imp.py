@@ -303,14 +303,14 @@ Suggest: nala, unattended-upgrades, needrestart, debsums, btop, ncdu, tldr,
                         f"Blocked dangerous command: `{s}`\n"
                         f"{PRODUCT_NAME} will not execute commands that could destroy system data."
                     )
+            # Determine once (before any mutation) whether this is an apt command
+            is_apt = "apt-get" in s or s.lstrip("sudo ").startswith("apt ")
+            is_pkg_op = any(k in s for k in ("install", "upgrade", "dist-upgrade", "remove", "purge"))
             # Inject DEBIAN_FRONTEND=noninteractive for apt commands
-            if ("apt-get" in s or s.lstrip("sudo ").startswith("apt ")) and \
-               "DEBIAN_FRONTEND" not in s and \
-               any(k in s for k in ("install", "upgrade", "dist-upgrade", "remove", "purge")):
+            if is_apt and is_pkg_op and "DEBIAN_FRONTEND" not in s:
                 s = f"DEBIAN_FRONTEND=noninteractive {s}"
             # Inject -y for unattended apt runs
-            if any(k in s for k in ("install", "upgrade", "remove", "purge")) and \
-               ("apt" in s) and " -y" not in s and "--yes" not in s:
+            if is_apt and is_pkg_op and " -y" not in s and "--yes" not in s:
                 s += " -y"
             safe.append(s)
         return ExecBlock(
@@ -797,7 +797,9 @@ def _parse_exec(response: str, auto_exec: bool):
             f"or type `run the fix`."
         )
         return clean, None
-    if _DISTRO_INFO and not _DISTRO_INFO.supported:
+    if not _DISTRO_INFO or not _DISTRO_FAMILY:
+        return clean, "✗ Auto-execution not available: distro not yet detected (is the daemon running?)."
+    if not _DISTRO_INFO.supported:
         return clean, f"✗ Auto-execution not supported on {_DISTRO_INFO.distro_name} yet."
     try:
         raw = json.loads(m.group(1))
