@@ -590,7 +590,17 @@ def _scan_hardware() -> dict:
 # Global hardware snapshot — populated at demon startup
 _HW_SNAPSHOT: dict = {}
 
+# ── System-prompt cache ───────────────────────────────────────────────────────
+# The prompt is expensive to build (reads disk, joins thousands of tokens).
+# We rebuild only when shell history actually changes between calls.
+_PROMPT_CACHE: dict = {"text": None, "history_sig": None}
+
 def _build_system_prompt(shell_history: list) -> str:
+    # Return cached prompt if history hasn't changed since last build
+    sig = hash(tuple(shell_history[-50:])) if shell_history else 0
+    if _PROMPT_CACHE["text"] is not None and _PROMPT_CACHE["history_sig"] == sig:
+        return _PROMPT_CACHE["text"]
+
     parts = [BASE_PROMPT]
 
     # Inject user-declared distro from setup config (highest priority context)
@@ -640,7 +650,10 @@ def _build_system_prompt(shell_history: list) -> str:
             f"\n## User's recent shell history ({len(recent)} commands)\n"
             "```bash\n" + "\n".join(recent) + "\n```"
         )
-    return "\n\n".join(parts)
+    result = "\n\n".join(parts)
+    _PROMPT_CACHE["text"] = result
+    _PROMPT_CACHE["history_sig"] = sig
+    return result
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -658,6 +671,7 @@ class _SessionState:
         self._lock         = threading.Lock()
         self.conversations = {}
         self.shell_history = []
+        self.pending_blocks = {}   # sid → ExecBlock awaiting sandbox confirmation
         self._load_history()
 
     def _load_history(self):
@@ -737,7 +751,7 @@ def _call_api(sid: str, message: str, api_key: str = "") -> str:
         payload = json.dumps({
             "model":    OLLAMA_MODEL,
             "messages": messages,
-            "stream":   False,
+            "stream":   True,
             "options":  {"num_predict": 1024, "temperature": 0.2},
         }).encode()
 
@@ -746,10 +760,22 @@ def _call_api(sid: str, message: str, api_key: str = "") -> str:
             data=payload, method="POST",
             headers={"Content-Type": "application/json"},
         )
+        # Stream tokens from Ollama — prevents read-timeout on slow/large models
+        # and lets the server stay responsive while the model is generating.
+        tokens = []
         with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read())
+            for raw_line in resp:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                chunk = json.loads(raw_line)
+                token = chunk.get("message", {}).get("content", "")
+                if token:
+                    tokens.append(token)
+                if chunk.get("done"):
+                    break
 
-        reply = data.get("message", {}).get("content", "")
+        reply = "".join(tokens)
         if not reply:
             reply = "✗ Empty response from Ollama."
         _state.add_message(sid, "assistant", reply)
@@ -782,6 +808,60 @@ def _execute(block: ExecBlock) -> str:
             lines.append(f"✗ Error: {e}"); break
         lines.append("")
     return "\n".join(lines)
+
+
+# ── Developer sandbox ─────────────────────────────────────────────────────────
+# When dev_sandbox is enabled in config.json, exec blocks are run inside a
+# throwaway Docker container before being applied to the host.  The user sees
+# the dry-run output and must confirm before the real commands execute.
+
+_SANDBOX_IMAGES = {
+    "debian": "ubuntu:22.04",
+    "redhat": "fedora:latest",
+    "arch":   "archlinux:latest",
+    "suse":   "opensuse/leap:latest",
+    "alpine": "alpine:latest",
+}
+
+def _sandbox_exec(block: ExecBlock, distro_family: str = "debian") -> tuple:
+    """
+    Run block.commands inside a throwaway Docker container.
+    Returns (output: str, all_passed: bool).
+    Requires Docker to be installed and running.
+    """
+    if not shutil.which("docker"):
+        return "✗ Docker not found — install Docker to use sandbox mode.", False
+
+    image = _SANDBOX_IMAGES.get(distro_family, "ubuntu:22.04")
+    lines = [f"🧪 Sandbox dry-run: {block.description}",
+             f"   Image: {image}", "─" * 50]
+    all_ok = True
+
+    for cmd in block.commands:
+        lines.append(f"$ {cmd}")
+        try:
+            r = subprocess.run(
+                ["docker", "run", "--rm", "--network=host",
+                 "-e", "DEBIAN_FRONTEND=noninteractive",
+                 image, "sh", "-c", cmd],
+                capture_output=True, text=True, timeout=60,
+            )
+            if r.stdout.strip(): lines.append(r.stdout.strip())
+            if r.stderr.strip(): lines.append(f"[stderr] {r.stderr.strip()}")
+            lines.append(f"→ exit {r.returncode} {'✓' if r.returncode == 0 else '✗'}")
+            if r.returncode != 0:
+                all_ok = False
+                lines.append("⚠ Non-zero exit — stopping sandbox run.")
+                break
+        except subprocess.TimeoutExpired:
+            lines.append("✗ Timed out in sandbox (60 s).")
+            all_ok = False; break
+        except Exception as e:
+            lines.append(f"✗ Sandbox error: {e}")
+            all_ok = False; break
+        lines.append("")
+
+    return "\n".join(lines), all_ok
 
 
 _EXEC_RE = re.compile(r"<DAEMONIQ_EXEC>\s*(.*?)\s*</DAEMONIQ_EXEC>", re.DOTALL)
@@ -851,8 +931,45 @@ def _handle_client(conn):
                 _send(conn, {"error": msg}); return
             log.info(f"[{sid}] {req.get('message','')[:80]}")
             raw_reply = _call_api(sid, req.get("message", ""))
-            clean, exec_out = _parse_exec(raw_reply, req.get("auto_exec", False))
+            auto_exec = req.get("auto_exec", False)
+            clean, exec_out = _parse_exec(raw_reply, auto_exec)
+
+            # Developer sandbox: if enabled and an exec block exists, run it
+            # in Docker first and ask the client to confirm before live execution.
+            cfg = _load_config()
+            if cfg.get("dev_sandbox") and auto_exec and exec_out is None:
+                m = _EXEC_RE.search(raw_reply)
+                if m:
+                    try:
+                        raw_block = json.loads(m.group(1))
+                        block = ExecBlock(
+                            commands=raw_block.get("commands", []),
+                            description=raw_block.get("description", ""),
+                            requires_sudo=raw_block.get("requires_sudo", False),
+                        )
+                        block = _DISTRO_FAMILY.sanitize_exec_block(block, _DISTRO_INFO)
+                        family = _DISTRO_INFO.family if _DISTRO_INFO else "debian"
+                        sandbox_out, sandbox_ok = _sandbox_exec(block, family)
+                        _state.pending_blocks[sid] = block
+                        _send(conn, {
+                            "reply": clean, "exec_output": None,
+                            "sandbox_output": sandbox_out,
+                            "sandbox_passed": sandbox_ok,
+                            "awaiting_confirm": True,
+                            "session": sid,
+                        })
+                        return
+                    except (ValueError, json.JSONDecodeError) as e:
+                        log.warning(f"Sandbox parse error: {e}")
+
             _send(conn, {"reply": clean, "exec_output": exec_out, "session": sid})
+
+        elif cmd == "confirm_exec":
+            block = _state.pending_blocks.pop(sid, None)
+            if block is None:
+                _send(conn, {"error": "No pending execution to confirm."}); return
+            exec_out = _execute(block)
+            _send(conn, {"exec_output": exec_out, "session": sid})
 
         elif cmd == "history_import":
             cmds = req.get("commands", [])
@@ -1240,6 +1357,7 @@ def _repl(session: str, api_key: str = "", auto_exec: bool = False):
   {C.GREEN}history{C.RESET}          Show imported shell history (last 20)
   {C.GREEN}clear{C.RESET}            Clear current session context
   {C.GREEN}exec on/off{C.RESET}      Toggle auto-execution of suggested fixes
+  {C.GREEN}sandbox on/off{C.RESET}  [dev] Dry-run fixes in Docker before applying
   {C.GREEN}exit / quit{C.RESET}      Exit REPL (demon stays running)
 
 {C.CYAN}Example prompts:{C.RESET}
@@ -1269,16 +1387,64 @@ def _repl(session: str, api_key: str = "", auto_exec: bool = False):
             else:
                 print(f"{C.YELLOW}No history imported yet{C.RESET}")
 
+        elif user_input in ("sandbox on", "sandbox off"):
+            cfg = _load_config()
+            cfg["dev_sandbox"] = (user_input == "sandbox on")
+            _save_config(cfg)
+            if cfg["dev_sandbox"]:
+                print(f"{C.GREEN}✓ Sandbox mode ON{C.RESET} — exec blocks will dry-run in Docker first")
+                if not shutil.which("docker"):
+                    print(f"{C.YELLOW}⚠ Docker not found — install Docker for sandbox to work{C.RESET}")
+            else:
+                print(f"{C.YELLOW}⚠ Sandbox mode OFF{C.RESET}")
+
         else:
             # ── Send to demon ─────────────────────────────────────────────
-            print(f"\n{C.DIM}consulting the ether...{C.RESET}", end="\r", flush=True)
+            stop_spin = threading.Event()
+            def _spin():
+                import itertools
+                frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+                for f in itertools.cycle(frames):
+                    if stop_spin.is_set(): break
+                    print(f"\r{C.DIM}{f} consulting the ether...{C.RESET}",
+                          end="", flush=True)
+                    time.sleep(0.08)
+                print("\r" + " " * 35 + "\r", end="", flush=True)
+            spin_thread = threading.Thread(target=_spin, daemon=True)
+            spin_thread.start()
+
             r = _request({
                 "cmd": "chat", "message": user_input,
                 "session": session, "auto_exec": auto_exec,
             })
-            print(" " * 20, end="\r")
+            stop_spin.set(); spin_thread.join()
+
             if "error" in r:
                 print(f"{C.RED}✗ {r['error']}{C.RESET}")
+            elif r.get("awaiting_confirm"):
+                # Sandbox ran — show results and ask user to confirm
+                print(f"\n{C.GREEN}{C.BOLD}{PRODUCT_NAME}{C.RESET} {C.DGRAY}━━{C.RESET}")
+                _print_reply(r.get("reply", ""), None)
+                print(f"\n{C.CYAN}{C.BOLD}Sandbox dry-run result:{C.RESET}")
+                for line in r.get("sandbox_output", "").splitlines():
+                    print(f"  {line}")
+                icon = f"{C.GREEN}✓ passed{C.RESET}" if r.get("sandbox_passed") \
+                       else f"{C.RED}✗ failed{C.RESET}"
+                print(f"\nSandbox: {icon}")
+                try:
+                    confirm = input(
+                        f"{C.YELLOW}Apply to real system?{C.RESET} [y/N] "
+                    ).strip().lower()
+                except (KeyboardInterrupt, EOFError):
+                    confirm = "n"
+                if confirm == "y":
+                    cr = _request({"cmd": "confirm_exec", "session": session})
+                    if "error" in cr:
+                        print(f"{C.RED}✗ {cr['error']}{C.RESET}")
+                    else:
+                        _print_reply("", cr.get("exec_output"))
+                else:
+                    print(f"{C.YELLOW}Skipped.{C.RESET}")
             else:
                 print(f"\n{C.GREEN}{C.BOLD}{PRODUCT_NAME}{C.RESET} {C.DGRAY}━━{C.RESET}")
                 _print_reply(r.get("reply",""), r.get("exec_output"))
@@ -2183,6 +2349,17 @@ def main():
         print(" " * 20, end="\r")
         if "error" in r: print(f"{C.RED}✗ {r['error']}{C.RESET}"); sys.exit(1)
         _print_reply(r.get("reply",""), r.get("exec_output"))
+        # Sandbox: auto-confirm if sandbox passed, skip if it failed
+        if r.get("awaiting_confirm"):
+            print(f"\n{C.CYAN}Sandbox dry-run:{C.RESET}")
+            for line in r.get("sandbox_output", "").splitlines():
+                print(f"  {line}")
+            if r.get("sandbox_passed"):
+                print(f"{C.GREEN}✓ Sandbox passed — applying to real system...{C.RESET}")
+                cr = _request({"cmd": "confirm_exec", "session": args.session})
+                _print_reply("", cr.get("exec_output"))
+            else:
+                print(f"{C.RED}✗ Sandbox failed — not applying to real system.{C.RESET}")
         return
 
     # Interactive REPL
