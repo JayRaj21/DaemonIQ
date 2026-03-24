@@ -1,6 +1,6 @@
 # DaemonIQ
 
-A Linux troubleshooting assistant that runs as a background demon on your machine. Describe a problem in plain English — it diagnoses it, suggests a fix, and can apply the fix if you ask it to. It runs as a background process, always ready.
+A Linux troubleshooting assistant that runs as a background process on your machine. Describe a problem in plain English — it diagnoses it, suggests a fix, and can apply the fix if you ask it to.
 
 No cloud API. No account required. Runs entirely on your hardware using a local AI model via [Ollama](https://ollama.com).
 
@@ -65,14 +65,13 @@ Built-in knowledge covers `apt`, `dpkg`, `pip`, `snap`, and `flatpak`; NVIDIA, A
 
 ## Commands
 
-### Interactive session
+### Starting DaemonIQ
 
 | Command | Description |
 |---------|-------------|
 | `daemoniq` | Start an interactive session |
-| `daemoniq "question"` | One-shot question, no session |
+| `daemoniq "question"` | Ask a single question and exit |
 | `daemoniq --exec "question"` | Ask and automatically apply the fix |
-| `daemoniq --session NAME "question"` | Ask within a named session |
 | `daemoniq --no-color` | Disable colour output |
 
 ### Inside a session
@@ -81,32 +80,35 @@ Built-in knowledge covers `apt`, `dpkg`, `pip`, `snap`, and `flatpak`; NVIDIA, A
 |---------|-------------|
 | `exec on` | Apply fixes automatically when suggested |
 | `exec off` | Show fixes without applying them (default) |
-| `clear` | Clear conversation history for this session |
-| `history` | Show the last 20 recorded shell commands |
-| `status` | Show whether the background process is running and which model is active |
-| `distro` | Show detected distro and package managers |
-| `help` | List available commands |
-| `exit` | Close the interactive session (the background process keeps running) |
+| `sandbox on` | [dev] Test fixes in Docker before applying |
+| `sandbox off` | Disable sandbox mode |
+| `clear` | Wipe the conversation history and start fresh |
+| `history` | Show your last 20 recorded shell commands |
+| `info` | Show status, distro, model, and package managers |
+| `hardware` | Show detected hardware, drivers, and kernel errors |
+| `help` | Show the help menu |
+| `close` | Close this session (program keeps running in background) |
+| `stop` | Shut down the program completely |
+
+> `close` also accepts `quit` and `q`. `stop` also accepts `end`.
 
 ### Managing the background process
 
 | Command | Description |
 |---------|-------------|
-| `daemoniq start` | Start the background process manually |
+| `daemoniq start` | Start the background process |
 | `daemoniq stop` | Stop the background process |
 | `daemoniq restart` | Stop and restart the background process |
-| `daemoniq status` | Show PID, distro, backend, and hardware summary |
-| `daemoniq logs` | Stream the live log output of the background process |
+| `daemoniq logs` | Stream the live log output |
 
-### Configuration
+### Configuration and information
 
 | Command | Description |
 |---------|-------------|
-| `daemoniq setup` | Re-run the setup wizard |
-| `daemoniq distro` | Show detected distro and package managers |
+| `daemoniq info` | Show status, distro, model, and package managers |
 | `daemoniq hardware` | Show hardware snapshot — GPU, drivers, dmesg errors |
 | `daemoniq history` | Show the last 50 recorded shell commands |
-| `daemoniq sessions` | List active named sessions |
+| `daemoniq setup` | Re-run the setup wizard |
 
 ### Updates and maintenance
 
@@ -118,40 +120,38 @@ Built-in knowledge covers `apt`, `dpkg`, `pip`, `snap`, and `flatpak`; NVIDIA, A
 | `daemoniq rollback` | Restore the previous version |
 | `daemoniq uninstall` | Remove DaemonIQ from this machine |
 
-### Sessions
-
-Sessions maintain separate conversation histories, which is useful when working across different machines or projects at once:
-
-```bash
-daemoniq --session server "nginx won't start after the last upgrade"
-daemoniq --session laptop "bluetooth keeps disconnecting"
-daemoniq sessions
-```
-
-The default session is named `default`.
-
 ---
 
 ## Quick reference
 
 ```
-daemoniq                           Start a session
-daemoniq "question"                One-shot question
-daemoniq --exec "question"         Ask and apply fix
-daemoniq --session NAME "q"        Named session
+daemoniq                     Start a session
+daemoniq "question"          Ask a single question
+daemoniq --exec "question"   Ask and auto-apply the fix
 
-daemoniq setup                     Re-run setup
-daemoniq start / stop / restart    Start, stop, or restart the background process
-daemoniq status / logs             Check health and stream live log output
-daemoniq distro / hardware         System info
-daemoniq history / sessions        History and sessions
-daemoniq version / update          Version and patching
-daemoniq rollback / uninstall      Recovery and removal
+daemoniq start               Start the background process
+daemoniq stop                Stop the background process
+daemoniq restart             Restart the background process
+daemoniq logs                View live logs
+daemoniq info                Show status and system info
+daemoniq hardware            Show hardware and driver info
+daemoniq history             Show recorded shell commands
+daemoniq setup               Re-run setup wizard
+daemoniq version             Show installed version
+daemoniq update              Apply a patch
+daemoniq rollback            Restore previous version
+daemoniq uninstall           Remove DaemonIQ
 
-In a session:
-  exec on / off    Toggle auto-apply
-  clear            Reset conversation
-  exit             End session
+Inside a session:
+  exec on / off      Apply or show fixes
+  sandbox on / off   [dev] Test fixes in Docker before applying
+  clear              Wipe conversation history
+  history            Show shell command history
+  info               Show status and system info
+  hardware           Show hardware and driver info
+  help               Show the help menu
+  close              Close this session
+  stop               Shut down completely
 ```
 
 ---
@@ -159,6 +159,6 @@ In a session:
 ## Notes
 
 - Requires Python 3.8+ and [Ollama](https://ollama.com)
-- Nothing is installed system-wide — all files live under `~/.daemoniq-demon/` (the background process install directory)
-- "DaemonIQ" is a working name. To rename it, edit the `BRANDING` block at the top of any variant script
+- A GPU is not required — DaemonIQ runs on CPU. If a GPU is present, Ollama will use it automatically.
+- Nothing is installed system-wide — all files live under `~/.daemoniq-demon/`
 - Full installation instructions: [INSTALL_GUIDE.md](INSTALL_GUIDE.md)

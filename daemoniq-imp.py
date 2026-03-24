@@ -20,7 +20,7 @@ No API key or external packages needed.
 
 PRODUCT_NAME    = "DaemonIQ"
 PRODUCT_TAGLINE = "Linux Troubleshooting Assistant"
-PRODUCT_VERSION = "0.4.4"
+PRODUCT_VERSION = "0.5.0"
 CLI_COMMAND     = "daemoniq"
 DAEMON_LABEL    = "daemoniq-demon"
 AI_PERSONA      = PRODUCT_NAME
@@ -303,14 +303,14 @@ Suggest: nala, unattended-upgrades, needrestart, debsums, btop, ncdu, tldr,
                         f"Blocked dangerous command: `{s}`\n"
                         f"{PRODUCT_NAME} will not execute commands that could destroy system data."
                     )
+            # Determine once (before any mutation) whether this is an apt command
+            is_apt = "apt-get" in s or s.lstrip("sudo ").startswith("apt ")
+            is_pkg_op = any(k in s for k in ("install", "upgrade", "dist-upgrade", "remove", "purge"))
             # Inject DEBIAN_FRONTEND=noninteractive for apt commands
-            if ("apt-get" in s or s.lstrip("sudo ").startswith("apt ")) and \
-               "DEBIAN_FRONTEND" not in s and \
-               any(k in s for k in ("install", "upgrade", "dist-upgrade", "remove", "purge")):
+            if is_apt and is_pkg_op and "DEBIAN_FRONTEND" not in s:
                 s = f"DEBIAN_FRONTEND=noninteractive {s}"
             # Inject -y for unattended apt runs
-            if any(k in s for k in ("install", "upgrade", "remove", "purge")) and \
-               ("apt" in s) and " -y" not in s and "--yes" not in s:
+            if is_apt and is_pkg_op and " -y" not in s and "--yes" not in s:
                 s += " -y"
             safe.append(s)
         return ExecBlock(
@@ -487,8 +487,8 @@ _HW_COMMANDS = {
     "network_hw":      ["lspci", "-nnk", "-d", "::0200"],  # Network controllers
     "audio_hw":        ["lspci", "-nnk", "-d", "::0401"],  # Audio devices
     "block_devices":   ["lsblk", "-o", "NAME,MODEL,TRAN,SIZE"],
-    "cpu_info":        ["grep", "-m4", "model name\|cpu MHz\|siblings\|cpu cores", "/proc/cpuinfo"],
-    "memory_info":     ["grep", "MemTotal\|MemAvailable", "/proc/meminfo"],
+    "cpu_info":        ["sh", "-c", "grep -m4 'model name|cpu MHz|siblings|cpu cores' /proc/cpuinfo"],
+    "memory_info":     ["sh", "-c", "grep 'MemTotal|MemAvailable' /proc/meminfo"],
     "firmware_info":   ["dmesg", "-t", "-l", "err"],
 }
 
@@ -590,7 +590,17 @@ def _scan_hardware() -> dict:
 # Global hardware snapshot — populated at demon startup
 _HW_SNAPSHOT: dict = {}
 
+# ── System-prompt cache ───────────────────────────────────────────────────────
+# The prompt is expensive to build (reads disk, joins thousands of tokens).
+# We rebuild only when shell history actually changes between calls.
+_PROMPT_CACHE: dict = {"text": None, "history_sig": None}
+
 def _build_system_prompt(shell_history: list) -> str:
+    # Return cached prompt if history hasn't changed since last build
+    sig = hash(tuple(shell_history[-50:])) if shell_history else 0
+    if _PROMPT_CACHE["text"] is not None and _PROMPT_CACHE["history_sig"] == sig:
+        return _PROMPT_CACHE["text"]
+
     parts = [BASE_PROMPT]
 
     # Inject user-declared distro from setup config (highest priority context)
@@ -640,7 +650,10 @@ def _build_system_prompt(shell_history: list) -> str:
             f"\n## User's recent shell history ({len(recent)} commands)\n"
             "```bash\n" + "\n".join(recent) + "\n```"
         )
-    return "\n\n".join(parts)
+    result = "\n\n".join(parts)
+    _PROMPT_CACHE["text"] = result
+    _PROMPT_CACHE["history_sig"] = sig
+    return result
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -658,6 +671,7 @@ class _SessionState:
         self._lock         = threading.Lock()
         self.conversations = {}
         self.shell_history = []
+        self.pending_blocks = {}   # sid → ExecBlock awaiting sandbox confirmation
         self._load_history()
 
     def _load_history(self):
@@ -737,7 +751,7 @@ def _call_api(sid: str, message: str, api_key: str = "") -> str:
         payload = json.dumps({
             "model":    OLLAMA_MODEL,
             "messages": messages,
-            "stream":   False,
+            "stream":   True,
             "options":  {"num_predict": 1024, "temperature": 0.2},
         }).encode()
 
@@ -746,10 +760,23 @@ def _call_api(sid: str, message: str, api_key: str = "") -> str:
             data=payload, method="POST",
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read())
+        # Stream tokens from Ollama — prevents read-timeout on slow/large models
+        # and lets the server stay responsive while the model is generating.
+        # 600s timeout for CPU-only machines running large models.
+        tokens = []
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            for raw_line in resp:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                chunk = json.loads(raw_line)
+                token = chunk.get("message", {}).get("content", "")
+                if token:
+                    tokens.append(token)
+                if chunk.get("done"):
+                    break
 
-        reply = data.get("message", {}).get("content", "")
+        reply = "".join(tokens)
         if not reply:
             reply = "✗ Empty response from Ollama."
         _state.add_message(sid, "assistant", reply)
@@ -766,7 +793,7 @@ def _execute(block: ExecBlock) -> str:
         lines.append(f"$ {cmd}")
         try:
             r = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=120,
+                cmd, shell=True, capture_output=True, text=True, timeout=300,
                 env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
             )
             if r.stdout.strip(): lines.append(r.stdout.strip())
@@ -784,6 +811,60 @@ def _execute(block: ExecBlock) -> str:
     return "\n".join(lines)
 
 
+# ── Developer sandbox ─────────────────────────────────────────────────────────
+# When dev_sandbox is enabled in config.json, exec blocks are run inside a
+# throwaway Docker container before being applied to the host.  The user sees
+# the test output and must confirm before the real commands execute.
+
+_SANDBOX_IMAGES = {
+    "debian": "ubuntu:22.04",
+    "redhat": "fedora:latest",
+    "arch":   "archlinux:latest",
+    "suse":   "opensuse/leap:latest",
+    "alpine": "alpine:latest",
+}
+
+def _sandbox_exec(block: ExecBlock, distro_family: str = "debian") -> tuple:
+    """
+    Run block.commands inside a throwaway Docker container.
+    Returns (output: str, all_passed: bool).
+    Requires Docker to be installed and running.
+    """
+    if not shutil.which("docker"):
+        return "✗ Docker not found — install Docker to use sandbox mode.", False
+
+    image = _SANDBOX_IMAGES.get(distro_family, "ubuntu:22.04")
+    lines = [f"Sandbox test: {block.description}",
+             f"   Image: {image}", "─" * 50]
+    all_ok = True
+
+    for cmd in block.commands:
+        lines.append(f"$ {cmd}")
+        try:
+            r = subprocess.run(
+                ["docker", "run", "--rm", "--network=host",
+                 "-e", "DEBIAN_FRONTEND=noninteractive",
+                 image, "sh", "-c", cmd],
+                capture_output=True, text=True, timeout=60,
+            )
+            if r.stdout.strip(): lines.append(r.stdout.strip())
+            if r.stderr.strip(): lines.append(f"[stderr] {r.stderr.strip()}")
+            lines.append(f"→ exit {r.returncode} {'✓' if r.returncode == 0 else '✗'}")
+            if r.returncode != 0:
+                all_ok = False
+                lines.append("⚠ Non-zero exit — stopping sandbox run.")
+                break
+        except subprocess.TimeoutExpired:
+            lines.append("✗ Timed out in sandbox (60 s).")
+            all_ok = False; break
+        except Exception as e:
+            lines.append(f"✗ Sandbox error: {e}")
+            all_ok = False; break
+        lines.append("")
+
+    return "\n".join(lines), all_ok
+
+
 _EXEC_RE = re.compile(r"<DAEMONIQ_EXEC>\s*(.*?)\s*</DAEMONIQ_EXEC>", re.DOTALL)
 
 def _parse_exec(response: str, auto_exec: bool):
@@ -797,7 +878,9 @@ def _parse_exec(response: str, auto_exec: bool):
             f"or type `run the fix`."
         )
         return clean, None
-    if _DISTRO_INFO and not _DISTRO_INFO.supported:
+    if not _DISTRO_INFO or not _DISTRO_FAMILY:
+        return clean, "✗ Auto-execution not available: distro not yet detected (is the daemon running?)."
+    if not _DISTRO_INFO.supported:
         return clean, f"✗ Auto-execution not supported on {_DISTRO_INFO.distro_name} yet."
     try:
         raw = json.loads(m.group(1))
@@ -849,8 +932,45 @@ def _handle_client(conn):
                 _send(conn, {"error": msg}); return
             log.info(f"[{sid}] {req.get('message','')[:80]}")
             raw_reply = _call_api(sid, req.get("message", ""))
-            clean, exec_out = _parse_exec(raw_reply, req.get("auto_exec", False))
+            auto_exec = req.get("auto_exec", False)
+            clean, exec_out = _parse_exec(raw_reply, auto_exec)
+
+            # Developer sandbox: if enabled and an exec block exists, run it
+            # in Docker first and ask the client to confirm before live execution.
+            cfg = _load_config()
+            if cfg.get("dev_sandbox") and auto_exec and exec_out is None:
+                m = _EXEC_RE.search(raw_reply)
+                if m:
+                    try:
+                        raw_block = json.loads(m.group(1))
+                        block = ExecBlock(
+                            commands=raw_block.get("commands", []),
+                            description=raw_block.get("description", ""),
+                            requires_sudo=raw_block.get("requires_sudo", False),
+                        )
+                        block = _DISTRO_FAMILY.sanitize_exec_block(block, _DISTRO_INFO)
+                        family = _DISTRO_INFO.family if _DISTRO_INFO else "debian"
+                        sandbox_out, sandbox_ok = _sandbox_exec(block, family)
+                        _state.pending_blocks[sid] = block
+                        _send(conn, {
+                            "reply": clean, "exec_output": None,
+                            "sandbox_output": sandbox_out,
+                            "sandbox_passed": sandbox_ok,
+                            "awaiting_confirm": True,
+                            "session": sid,
+                        })
+                        return
+                    except (ValueError, json.JSONDecodeError) as e:
+                        log.warning(f"Sandbox parse error: {e}")
+
             _send(conn, {"reply": clean, "exec_output": exec_out, "session": sid})
+
+        elif cmd == "confirm_exec":
+            block = _state.pending_blocks.pop(sid, None)
+            if block is None:
+                _send(conn, {"error": "No pending execution to confirm."}); return
+            exec_out = _execute(block)
+            _send(conn, {"exec_output": exec_out, "session": sid})
 
         elif cmd == "history_import":
             cmds = req.get("commands", [])
@@ -987,7 +1107,7 @@ def _sep():
 
 
 # ── Socket communication ──────────────────────────────────────────────────────
-def _request(req: dict, timeout: int = 90) -> dict:
+def _request(req: dict, timeout: int = 660) -> dict:
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.settimeout(timeout)
@@ -1003,9 +1123,9 @@ def _request(req: dict, timeout: int = 90) -> dict:
         s.close()
         return json.loads(data.decode())
     except FileNotFoundError:
-        return {"error": f"Demon not running. Start with: {CLI_COMMAND} start"}
+        return {"error": f"Not running. Start with: {CLI_COMMAND} start"}
     except ConnectionRefusedError:
-        return {"error": f"Demon not responding. Try: {CLI_COMMAND} restart"}
+        return {"error": f"Not responding. Try: {CLI_COMMAND} restart"}
     except socket.timeout:
         return {"error": "Request timed out"}
     except Exception as e:
@@ -1021,7 +1141,7 @@ def _daemon_running() -> bool:
 # ── Demon lifecycle ──────────────────────────────────────────────────────────
 def _start_daemon(foreground=False):
     if _daemon_running():
-        print(f"{C.YELLOW}⚠ Demon already running{C.RESET}"); return True
+        print(f"{C.YELLOW}⚠ Already running{C.RESET}"); return True
     try:
         if foreground:
             os.execv(sys.executable, [sys.executable, __file__, "_daemon_fg"])
@@ -1035,13 +1155,13 @@ def _start_daemon(foreground=False):
                 time.sleep(0.3)
                 if _daemon_running():
                     pid = Path(PID_FILE).read_text().strip() if Path(PID_FILE).exists() else "?"
-                    print(f"{C.GREEN}✓ {PRODUCT_NAME} demon started (PID {pid}){C.RESET}")
+                    print(f"{C.GREEN}✓ {PRODUCT_NAME} started{C.RESET}")
                     print(f"{C.DIM}  Logs: tail -f {LOG_FILE}{C.RESET}")
                     return True
-            print(f"{C.RED}✗ Demon failed to start. Check: tail {LOG_FILE}{C.RESET}")
+            print(f"{C.RED}✗ Failed to start. Check logs: {CLI_COMMAND} logs{C.RESET}")
             return False
     except Exception as e:
-        print(f"{C.RED}✗ Could not start demon: {e}{C.RESET}"); return False
+        print(f"{C.RED}✗ Could not start: {e}{C.RESET}"); return False
 
 def _stop_daemon():
     if not Path(PID_FILE).exists():
@@ -1049,7 +1169,7 @@ def _stop_daemon():
     try:
         pid = int(Path(PID_FILE).read_text().strip())
         os.kill(pid, 15)
-        print(f"{C.GREEN}✓ Demon stopped (PID {pid}){C.RESET}")
+        print(f"{C.GREEN}✓ Stopped{C.RESET}")
     except ProcessLookupError:
         print(f"{C.YELLOW}⚠ Process not found, cleaning up...{C.RESET}")
         for f in [PID_FILE, SOCKET_PATH]: Path(f).unlink(missing_ok=True)
@@ -1065,8 +1185,8 @@ def _show_hardware():
         try:
             snap = json.load(open(HARDWARE_SNAPSHOT_FILE))
         except Exception:
-            print(f"{C.RED}✗ Demon not running and no cached snapshot found.{C.RESET}")
-            print(f"  Start the demon first: {C.CYAN}{CLI_COMMAND} start{C.RESET}")
+            print(f"{C.RED}✗ Not running and no cached snapshot found.{C.RESET}")
+            print(f"  Start it first: {C.CYAN}{CLI_COMMAND} start{C.RESET}")
             return
     else:
         r = _request({"cmd": "hardware"})
@@ -1108,7 +1228,7 @@ def _show_hardware():
         if len(lines) > 15:
             for line in lines[:15]:
                 print(f"  {C.MGRAY}{line}{C.RESET}")
-            print(f"  {C.DIM}... ({len(lines) - 15} more lines — see demon log for full output){C.RESET}")
+            print(f"  {C.DIM}... ({len(lines) - 15} more lines — run '{CLI_COMMAND} logs' for full output){C.RESET}")
         else:
             for line in lines:
                 print(f"  {C.MGRAY}{line}{C.RESET}")
@@ -1116,22 +1236,33 @@ def _show_hardware():
 
 
 def _show_status():
+    _show_info()
+
+def _show_info():
     if not _daemon_running():
-        print(f"{C.RED}✗ Demon is NOT running{C.RESET}")
-        print(f"  Start with: {C.CYAN}{CLI_COMMAND} start{C.RESET}"); return
-    r = _request({"cmd": "status"})
+        print(f"\n  {C.RED}✗ Background process is not running{C.RESET}")
+        print(f"  Start with: {C.CYAN}{CLI_COMMAND} start{C.RESET}\n"); return
+    r  = _request({"cmd": "status"})
+    dr = _request({"cmd": "distro_info"})
     if "error" in r: print(f"{C.RED}✗ {r['error']}{C.RESET}"); return
-    badge = f"{C.GREEN}[full support]{C.RESET}" if r.get("supported") else f"{C.YELLOW}[limited support]{C.RESET}"
-    print(f"{C.GREEN}✓ Demon running{C.RESET}  PID: {C.BOLD}{r.get('pid')}{C.RESET}")
-    print(f"  Distro:    {C.CYAN}{r.get('distro','?')}{C.RESET}  {badge}")
-    print(f"  Sessions:  {C.CYAN}{r.get('sessions',0)}{C.RESET}")
-    print(f"  History:   {C.CYAN}{r.get('history_entries',0)} commands{C.RESET}")
+
+    support = f"{C.GREEN}✓ Full support{C.RESET}" if r.get("supported") else f"{C.YELLOW}⚠ Limited support{C.RESET}"
+    pms     = ", ".join(dr.get("pkg_managers", []) or ["none detected"]) if "error" not in dr else "unknown"
+
+    print(f"\n  {C.CYAN}{C.BOLD}DaemonIQ Status{C.RESET}\n")
+    print(f"  Process:   {C.GREEN}running{C.RESET}  (PID {r.get('pid')})")
+    print(f"  Distro:    {C.WHITE}{r.get('distro','?')}{C.RESET}  {support}")
+    print(f"  Pkg mgrs:  {C.CYAN}{pms}{C.RESET}")
+    print(f"  Model:     {C.CYAN}{r.get('ai_backend', 'Ollama')}{C.RESET}")
+    print(f"  Sessions:  {C.CYAN}{r.get('sessions', 0)}{C.RESET}")
     print(f"  Log:       {C.DIM}{r.get('log')}{C.RESET}")
-    print(f"  AI:        {C.CYAN}{r.get('ai_backend', 'Ollama')}{C.RESET}")
+    if dr.get("support_note"):
+        print(f"\n  {C.YELLOW}⚠ {dr['support_note']}{C.RESET}")
+    print()
 
 def _show_distro():
     if not _daemon_running():
-        print(f"{C.RED}✗ Demon not running{C.RESET}"); return
+        print(f"{C.RED}✗ Not running{C.RESET}"); return
     r = _request({"cmd": "distro_info"})
     if "error" in r: print(f"{C.RED}✗ {r['error']}{C.RESET}"); return
     badge = f"{C.GREEN}✓ Fully supported{C.RESET}" if r.get("supported") else f"{C.YELLOW}⚠ Limited support{C.RESET}"
@@ -1196,22 +1327,12 @@ def _get_shell_history() -> list:
 def _repl(session: str, api_key: str = "", auto_exec: bool = False):
     print(_banner())
 
-    dr = _request({"cmd": "distro_info"})
-    if "error" not in dr:
-        badge = f"{C.GREEN}[full support]{C.RESET}" if dr.get("supported") else f"{C.YELLOW}[limited support]{C.RESET}"
-        pms   = ", ".join(dr.get("pkg_managers",[]) or ["none detected"])
-        print(f"{C.MGRAY}Session: {C.CYAN}{session}{C.RESET}  |  "
-              f"{C.WHITE}{dr.get('distro_name')}{C.RESET} {badge}  |  "
-              f"pkg: {C.CYAN}{pms}{C.RESET}")
-        if not dr.get("supported") and dr.get("support_note"):
-            print(f"{C.YELLOW}⚠ {dr['support_note']}{C.RESET}")
-    print(f"{C.MGRAY}Model: {C.CYAN}{OLLAMA_MODEL}{C.RESET}  |  Type {C.CYAN}help{C.MGRAY} for commands  |  {C.CYAN}Ctrl+C{C.MGRAY} to exit{C.RESET}")
+    print(f"  {C.DIM}Type {C.RESET}{C.CYAN}help{C.DIM} for commands  |  {C.CYAN}Ctrl+C{C.DIM} to exit{C.RESET}")
     _sep()
 
     hist = _get_shell_history()
     if hist:
         _request({"cmd": "history_import", "commands": hist})
-        print(f"{C.DIM}📜 Bound {len(hist)} shell commands to memory{C.RESET}\n")
 
     while True:
         try:
@@ -1219,36 +1340,43 @@ def _repl(session: str, api_key: str = "", auto_exec: bool = False):
                 f"{C.GREEN}you@{CLI_COMMAND}{C.RESET}{C.DGRAY}:{C.RESET}{C.CYAN}~{C.RESET}$ "
             ).strip()
         except (KeyboardInterrupt, EOFError):
-            print(f"\n{C.MGRAY}Goodbye. {PRODUCT_NAME} demon keeps running in background.{C.RESET}")
+            print(f"\n{C.MGRAY}The demon lingers.{C.RESET}")
             break
 
         if not user_input: continue
 
         # ── Built-in commands ──────────────────────────────────────────────
-        if user_input in ("exit", "quit", "q"):
-            print(f"{C.MGRAY}Exiting. Use '{CLI_COMMAND} stop' to halt the demon.{C.RESET}")
+        if user_input in ("close", "exit", "quit", "q"):
+            print(f"{C.MGRAY}Use '{CLI_COMMAND} stop' to shut down completely.{C.RESET}")
             break
 
         elif user_input == "help":
             print(f"""
-{C.CYAN}{C.BOLD}{PRODUCT_NAME} REPL Commands:{C.RESET}
-  {C.GREEN}help{C.RESET}             Show this help
-  {C.GREEN}status{C.RESET}           Show demon status
-  {C.GREEN}distro{C.RESET}           Show distro & package manager info
-  {C.GREEN}history{C.RESET}          Show imported shell history (last 20)
-  {C.GREEN}clear{C.RESET}            Clear current session context
-  {C.GREEN}exec on/off{C.RESET}      Toggle auto-execution of suggested fixes
-  {C.GREEN}exit / quit{C.RESET}      Exit REPL (demon stays running)
+{C.CYAN}{C.BOLD}  ── Help Menu ───────────────────────────────────────────────{C.RESET}
 
-{C.CYAN}Example prompts:{C.RESET}
-  "sudo apt upgrade gives E: dpkg was interrupted..."
-  "analyze my history for problems"
-  "how do I fix broken dependencies?"
-  "give me UX improvement tips"
-  "run the fix" / "apply it"  (requires exec on)
+{C.CYAN}  Conversation{C.RESET}
+  Type any question or error message to get a diagnosis and fix.
+
+{C.CYAN}  Session commands{C.RESET}
+  {C.GREEN}exec on{C.RESET}          Automatically apply suggested fixes without confirmation
+  {C.GREEN}exec off{C.RESET}         Show suggested fixes but do not apply them (default)
+  {C.GREEN}sandbox on/off{C.RESET}   [dev] Test fixes in Docker before applying
+  {C.GREEN}clear{C.RESET}            Wipe the conversation history and start fresh
+  {C.GREEN}history{C.RESET}          Show your last 20 recorded shell commands
+
+{C.CYAN}  System information{C.RESET}
+  {C.GREEN}info{C.RESET}       Show status, distro, model, and package managers
+  {C.GREEN}hardware{C.RESET}   Show detected hardware, drivers, and kernel errors
+
+{C.CYAN}  Program control{C.RESET}
+  {C.GREEN}close{C.RESET}      Close this session (program keeps running in background)
+  {C.GREEN}stop / end{C.RESET}  Shut down the program completely
+  {C.GREEN}help{C.RESET}       Show this menu
+{C.CYAN}  ────────────────────────────────────────────────────────────{C.RESET}
 """)
-        elif user_input == "status":   _show_status()
-        elif user_input == "distro":   _show_distro()
+        elif user_input == "status":   _show_info()
+        elif user_input == "info":     _show_info()
+        elif user_input == "distro":   _show_info()
         elif user_input == "clear":
             _request({"cmd": "session_clear", "session": session})
             print(f"{C.GREEN}✓ Memory wiped{C.RESET}")
@@ -1267,16 +1395,64 @@ def _repl(session: str, api_key: str = "", auto_exec: bool = False):
             else:
                 print(f"{C.YELLOW}No history imported yet{C.RESET}")
 
+        elif user_input in ("sandbox on", "sandbox off"):
+            cfg = _load_config()
+            cfg["dev_sandbox"] = (user_input == "sandbox on")
+            _save_config(cfg)
+            if cfg["dev_sandbox"]:
+                print(f"{C.GREEN}✓ Sandbox mode ON{C.RESET} — exec blocks will be tested in Docker first")
+                if not shutil.which("docker"):
+                    print(f"{C.YELLOW}⚠ Docker not found — install Docker for sandbox to work{C.RESET}")
+            else:
+                print(f"{C.YELLOW}⚠ Sandbox mode OFF{C.RESET}")
+
         else:
             # ── Send to demon ─────────────────────────────────────────────
-            print(f"\n{C.DIM}consulting the ether...{C.RESET}", end="\r", flush=True)
+            stop_spin = threading.Event()
+            def _spin():
+                import itertools
+                frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+                for f in itertools.cycle(frames):
+                    if stop_spin.is_set(): break
+                    print(f"\r{C.DIM}{f} consulting the ether...{C.RESET}",
+                          end="", flush=True)
+                    time.sleep(0.08)
+                print("\r" + " " * 35 + "\r", end="", flush=True)
+            spin_thread = threading.Thread(target=_spin, daemon=True)
+            spin_thread.start()
+
             r = _request({
                 "cmd": "chat", "message": user_input,
                 "session": session, "auto_exec": auto_exec,
             })
-            print(" " * 20, end="\r")
+            stop_spin.set(); spin_thread.join()
+
             if "error" in r:
                 print(f"{C.RED}✗ {r['error']}{C.RESET}")
+            elif r.get("awaiting_confirm"):
+                # Sandbox ran — show results and ask user to confirm
+                print(f"\n{C.GREEN}{C.BOLD}{PRODUCT_NAME}{C.RESET} {C.DGRAY}━━{C.RESET}")
+                _print_reply(r.get("reply", ""), None)
+                print(f"\n{C.CYAN}{C.BOLD}Sandbox test result:{C.RESET}")
+                for line in r.get("sandbox_output", "").splitlines():
+                    print(f"  {line}")
+                icon = f"{C.GREEN}✓ passed{C.RESET}" if r.get("sandbox_passed") \
+                       else f"{C.RED}✗ failed{C.RESET}"
+                print(f"\nSandbox: {icon}")
+                try:
+                    confirm = input(
+                        f"{C.YELLOW}Apply to real system?{C.RESET} [y/N] "
+                    ).strip().lower()
+                except (KeyboardInterrupt, EOFError):
+                    confirm = "n"
+                if confirm == "y":
+                    cr = _request({"cmd": "confirm_exec", "session": session})
+                    if "error" in cr:
+                        print(f"{C.RED}✗ {cr['error']}{C.RESET}")
+                    else:
+                        _print_reply("", cr.get("exec_output"))
+                else:
+                    print(f"{C.YELLOW}Skipped.{C.RESET}")
             else:
                 print(f"\n{C.GREEN}{C.BOLD}{PRODUCT_NAME}{C.RESET} {C.DGRAY}━━{C.RESET}")
                 _print_reply(r.get("reply",""), r.get("exec_output"))
@@ -1373,24 +1549,15 @@ def _install_ollama() -> bool:
 
 
 def _setup_ollama(model: str):
-    """Ensure Ollama is installed, running, and the model is pulled."""
+    """Ensure Ollama is installed, running, and the model is pulled — automatically."""
     if not shutil.which("ollama"):
-        print(f"  {C.YELLOW}⚠{C.RESET} Ollama is not installed.")
-        try:
-            ans = input("  Install it now? [y/n] ").strip().lower()
-        except (KeyboardInterrupt, EOFError):
-            ans = "n"
-        if ans == "y":
-            if _install_ollama():
-                print(f"  {C.GREEN}✓{C.RESET} Ollama installed.")
-            else:
-                print(f"  {C.RED}✗{C.RESET} Install failed.")
-                print(f"  Install manually: https://ollama.com/download")
-                print(f"  Then run: ollama pull {model}\n")
-                return
+        print(f"  {C.DIM}Ollama not found — installing...{C.RESET}")
+        if _install_ollama():
+            print(f"  {C.GREEN}✓{C.RESET} Ollama installed.")
         else:
-            print(f"  Install later: https://ollama.com/download")
-            print(f"  Then: ollama pull {model}\n")
+            print(f"  {C.RED}✗{C.RESET} Ollama install failed.")
+            print(f"  Install manually: https://ollama.com/download")
+            print(f"  Then run: ollama pull {model}")
             return
 
     if not _ollama_running():
@@ -1400,21 +1567,14 @@ def _setup_ollama(model: str):
     base   = model.split(":")[0]
     pulled = _ollama_models()
     if any(base in m for m in pulled):
-        print(f"  {C.GREEN}✓{C.RESET} {model} is already downloaded.")
+        print(f"  {C.GREEN}✓{C.RESET} {model} already downloaded.")
         return
 
-    print()
-    try:
-        ans = input(f"  Download {model} now? (may be several GB) [y/n] ").strip().lower()
-    except (KeyboardInterrupt, EOFError):
-        ans = "n"
-    if ans == "y":
-        if _pull_model(model):
-            print(f"  {C.GREEN}✓{C.RESET} {model} ready.")
-        else:
-            print(f"  {C.YELLOW}⚠{C.RESET} Download failed. Run: ollama pull {model}")
+    print(f"  {C.DIM}Downloading {model} — this may take several minutes...{C.RESET}")
+    if _pull_model(model):
+        print(f"  {C.GREEN}✓{C.RESET} {model} ready.")
     else:
-        print(f"  {C.DIM}Download later: ollama pull {model}{C.RESET}")
+        print(f"  {C.YELLOW}⚠{C.RESET} Download failed. Run manually: ollama pull {model}")
 
 
 def _patch_script_model(script_name: str, old_pattern: str, new_model: str):
@@ -1497,11 +1657,14 @@ def _arrow_select(prompt: str, options: list, default: int = 0) -> int:
     return selected
 
 
-def run_setup():
-    print(_banner())
-    print(f"{C.CYAN}{C.BOLD}  Welcome to {PRODUCT_NAME}!{C.RESET}")
-    print(f"  Answer a couple of quick questions and you're ready to go.\n")
-    _sep()
+def run_setup(show_welcome: bool = True):
+    # Suppress banner if launched directly from installer (already shown)
+    if os.environ.get("DAEMONIQ_FRESH_INSTALL") != "1" and show_welcome:
+        print(_banner())
+    if show_welcome:
+        print(f"\n{C.CYAN}{C.BOLD}  Welcome to {PRODUCT_NAME}!{C.RESET}")
+        print(f"  Answer a couple of quick questions and you're ready to go.\n")
+        _sep()
 
     cfg = _load_config()
 
@@ -1572,18 +1735,12 @@ def run_setup():
     _sep()
 
 
-    print(f"  {C.CYAN}{C.BOLD}2) Sovereign{C.RESET}")
-    print( "     Best local quality. Needs 9GB+ RAM.")
-    print( "     Stronger reasoning for complex problems.")
-    print(f"     {C.DIM}(Qwen2.5 via Ollama){C.RESET}")
-    print()
-
     try:
         tier_options = [
             "Imp        — Runs on most machines (4GB+ RAM)  (Llama 3 via Ollama)",
             "Sovereign  — Best local quality   (9GB+ RAM)  (Qwen2.5 via Ollama)",
         ]
-        tier_idx = _arrow_select("Use arrow keys to select a tier, Enter to confirm", tier_options, 0)
+        tier_idx = _arrow_select("Use arrow keys to select a model, Enter to confirm", tier_options, 0)
     except (KeyboardInterrupt, EOFError):
         print(f"\n{C.YELLOW}  Setup cancelled. Run '{CLI_COMMAND} setup' any time.{C.RESET}\n")
         return
@@ -1761,7 +1918,7 @@ def run_update(patch_path: str = ""):
     _append_changelog(patch_version, f"Manually applied patch from {patch_path}")
 
     print(f"  {C.GREEN}✓{C.RESET} Patch applied — now at v{patch_version}")
-    print(f"  {C.DIM}Restart the demon to apply changes: {CLI_COMMAND} restart{C.RESET}\n")
+    print(f"  {C.DIM}Restart to apply: {CLI_COMMAND} restart{C.RESET}\n")
 
 
 def run_rollback():
@@ -1798,7 +1955,7 @@ def run_rollback():
     try:
         _shutil.copy2(bak_path, install_path)
         os.chmod(install_path, 0o755)
-        print(f"  {C.GREEN}✓{C.RESET} Rolled back. Restart the demon: {CLI_COMMAND} restart\n")
+        print(f"  {C.GREEN}✓{C.RESET} Rolled back. Restart to apply: {CLI_COMMAND} restart\n")
     except Exception as e:
         print(f"  {C.RED}✗{C.RESET} Rollback failed: {e}\n")
 
@@ -1812,16 +1969,8 @@ def run_uninstall():
     """
     import shutil as _shutil
 
-    print(f"\n  {C.CYAN}{C.BOLD}Uninstall {PRODUCT_NAME}{C.RESET}\n")
-    print(f"  This will remove:")
-    print(f"  {C.DIM}  All scripts and config:   {INSTALL_DIR}{C.RESET}")
-    print(f"  {C.DIM}  The demoniq command:      ~/.local/bin/{CLI_COMMAND}{C.RESET}")
-    print(f"  {C.DIM}  The PATH entry in your shell config{C.RESET}")
-    print(f"  {C.DIM}  The systemd service (if installed){C.RESET}")
-    print()
-
     try:
-        ans = input(f"  {C.RED}Are you sure? This cannot be undone. [y/n]:{C.RESET} ").strip().lower()
+        ans = input(f"\n  {C.RED}Uninstall {PRODUCT_NAME}? This cannot be undone. [y/n]:{C.RESET} ").strip().lower()
     except (KeyboardInterrupt, EOFError):
         print(f"\n  {C.DIM}Uninstall cancelled.{C.RESET}\n")
         return
@@ -1829,12 +1978,9 @@ def run_uninstall():
         print(f"  {C.DIM}Uninstall cancelled.{C.RESET}\n")
         return
 
-    print()
-
     # 1. Stop the demon
     if _daemon_running():
         _stop_daemon()
-        print(f"  {C.GREEN}✓{C.RESET} Demon stopped")
     else:
         Path(SOCKET_PATH).unlink(missing_ok=True)
         Path(PID_FILE).unlink(missing_ok=True)
@@ -1847,7 +1993,6 @@ def run_uninstall():
                            capture_output=True)
             os.remove(svc_file)
             subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-            print(f"  {C.GREEN}✓{C.RESET} systemd service removed")
         except Exception as e:
             print(f"  {C.YELLOW}⚠{C.RESET} Could not remove systemd service: {e}")
 
@@ -1855,12 +2000,10 @@ def run_uninstall():
     launcher = os.path.expanduser(f"~/.local/bin/{CLI_COMMAND}")
     if os.path.exists(launcher):
         os.remove(launcher)
-        print(f"  {C.GREEN}✓{C.RESET} Removed ~/.local/bin/{CLI_COMMAND}")
 
     # 4. Remove install directory (scripts, config, backups, snapshots)
     if os.path.exists(INSTALL_DIR):
         _shutil.rmtree(INSTALL_DIR)
-        print(f"  {C.GREEN}✓{C.RESET} Removed {INSTALL_DIR}")
 
     # 5. Remove PATH entry from shell config
     shell = os.environ.get("SHELL", "")
@@ -1885,7 +2028,6 @@ def run_uninstall():
             ]
             if len(filtered) < len(lines):
                 open(rc, "w").writelines(filtered)
-                print(f"  {C.GREEN}✓{C.RESET} Removed PATH entry from {rc}")
         except Exception as e:
             print(f"  {C.YELLOW}⚠{C.RESET} Could not clean {rc}: {e}")
 
@@ -2037,7 +2179,7 @@ def run_update(force: bool = False):
     _append_changelog(remote_version, changelog_notes)
 
     print(f"  {C.GREEN}✓{C.RESET} Updated to v{remote_version}.")
-    print(f"  {C.DIM}Restart the demon to apply: {CLI_COMMAND} restart{C.RESET}\n")
+    print(f"  {C.DIM}Restart to apply: {CLI_COMMAND} restart{C.RESET}\n")
 
 
 def run_rollback():
@@ -2074,7 +2216,7 @@ def run_rollback():
     try:
         _shutil.copy2(bak_path, install_path)
         os.chmod(install_path, 0o755)
-        print(f"  {C.GREEN}✓{C.RESET} Rolled back. Restart the demon: {CLI_COMMAND} restart\n")
+        print(f"  {C.GREEN}✓{C.RESET} Rolled back. Restart to apply: {CLI_COMMAND} restart\n")
     except Exception as e:
         print(f"  {C.RED}✗{C.RESET} Rollback failed: {e}\n")
 
@@ -2092,15 +2234,14 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             f"Examples:\n"
-            f"  {CLI_COMMAND} start                   Start the demon\n"
+            f"  {CLI_COMMAND} start                   Start the background process\n"
             f"  {CLI_COMMAND}                         Open interactive REPL\n"
             f"  {CLI_COMMAND} \"apt lock error\"        One-shot question\n"
             f"  {CLI_COMMAND} --exec \"fix broken pkg\"  Ask and auto-apply fix\n"
-            f"  {CLI_COMMAND} --session work           Use a named session\n"
-            f"  {CLI_COMMAND} status                   Check demon health\n"
+            f"  {CLI_COMMAND} info                     Show status and system info\n"
             f"  {CLI_COMMAND} distro                   Show distro info\n"
-            f"  {CLI_COMMAND} stop                     Stop the demon\n"
-            f"  {CLI_COMMAND} logs                     Tail demon logs"
+            f"  {CLI_COMMAND} stop                     Stop the background process\n"
+            f"  {CLI_COMMAND} logs                     View live logs"
         ),
     )
     parser.add_argument("message",    nargs="?",           help="One-shot message (skips REPL)")
@@ -2113,31 +2254,30 @@ def main():
 
     api_key = ""  # unused in local mode — Ollama needs no key
 
-    SUBCMDS = {"start","stop","restart","status","logs","history","sessions","distro","setup","hardware","version","update","rollback","uninstall"}
+    SUBCMDS = {"start","stop","end","restart","status","logs","history","sessions","distro","setup","hardware","version","update","rollback","uninstall","info"}
 
     if args.message in SUBCMDS:
         cmd = args.message
         if cmd == "start":
             _start_daemon()
-        elif cmd == "stop":
+        elif cmd in ("stop", "end"):
             _stop_daemon()
         elif cmd == "restart":
             _stop_daemon(); time.sleep(1); _start_daemon()
         elif cmd == "status":
-            _show_status()
+            _show_info()
+        elif cmd == "info":
+            _show_info()
         elif cmd == "distro":
-            if not _daemon_running():
-                print(f"{C.YELLOW}⚡ Starting {PRODUCT_NAME} demon...{C.RESET}")
-                _start_daemon()
-            _show_distro()
+            _show_info()
         elif cmd == "logs":
             os.execvp("tail", ["tail", "-f", LOG_FILE])
         elif cmd == "history":
-            if not _daemon_running(): print(f"{C.RED}✗ Demon not running{C.RESET}"); return
+            if not _daemon_running(): print(f"{C.RED}✗ Not running{C.RESET}"); return
             r = _request({"cmd": "history_get"})
             for c in r.get("history", [])[-50:]: print(c)
         elif cmd == "sessions":
-            if not _daemon_running(): print(f"{C.RED}✗ Demon not running{C.RESET}"); return
+            if not _daemon_running(): print(f"{C.RED}✗ Not running{C.RESET}"); return
             r = _request({"cmd": "sessions_list"})
             for s in r.get("sessions", []): print(s)
         elif cmd == "setup":
@@ -2160,7 +2300,7 @@ def main():
 
     # Ensure demon is running
     if not _daemon_running():
-        print(f"{C.YELLOW}⚡ Starting {PRODUCT_NAME} demon...{C.RESET}")
+        print(f"{C.YELLOW}⚡ Starting...{C.RESET}")
         if not _start_daemon(): sys.exit(1)
 
     # No API key needed — check Ollama is reachable instead
@@ -2173,7 +2313,7 @@ def main():
 
     # One-shot mode
     if args.message:
-        print(f"{C.DIM}thinking...{C.RESET}", end="\r", flush=True)
+        print(f"  {C.DIM}consulting the ether...{C.RESET}", flush=True)
         r = _request({
             "cmd": "chat", "message": args.message,
             "session": args.session, "auto_exec": args.auto_exec,
@@ -2181,6 +2321,17 @@ def main():
         print(" " * 20, end="\r")
         if "error" in r: print(f"{C.RED}✗ {r['error']}{C.RESET}"); sys.exit(1)
         _print_reply(r.get("reply",""), r.get("exec_output"))
+        # Sandbox: auto-confirm if sandbox passed, skip if it failed
+        if r.get("awaiting_confirm"):
+            print(f"\n{C.CYAN}Sandbox test:{C.RESET}")
+            for line in r.get("sandbox_output", "").splitlines():
+                print(f"  {line}")
+            if r.get("sandbox_passed"):
+                print(f"{C.GREEN}✓ Sandbox passed — applying to real system...{C.RESET}")
+                cr = _request({"cmd": "confirm_exec", "session": args.session})
+                _print_reply("", cr.get("exec_output"))
+            else:
+                print(f"{C.RED}✗ Sandbox failed — not applying to real system.{C.RESET}")
         return
 
     # Interactive REPL
