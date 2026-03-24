@@ -6,6 +6,8 @@
 - Python 3.8 or newer
 - [Ollama](https://ollama.com) — installed automatically during setup if not present
 
+**A GPU is not required.** DaemonIQ runs entirely on your CPU. If you do have a GPU, Ollama will use it automatically to speed things up — but if you don't, everything works the same, just a little slower.
+
 Check your Python version:
 
 ```bash
@@ -67,11 +69,15 @@ Qwen2.5 comes in several sizes. The wizard maps your RAM to the right one:
 | 24 GB+   | qwen2.5:32b | ~20 GB |
 | Not sure | qwen2.5:7b  | ~5 GB |
 
+**You do not need a GPU for any of these.** Ollama runs on CPU by default. If your machine has a compatible GPU (NVIDIA, AMD, or Apple Silicon), Ollama will detect and use it automatically for faster responses. If not, the model runs on CPU — responses will be a bit slower, but the quality is identical.
+
+If you are unsure whether your machine can handle Sovereign, choose Imp — it works well on almost any modern laptop or desktop.
+
 ---
 
 ## Ollama
 
-Both Imp and Demon use Ollama to run the model locally. If Ollama is not installed, the setup wizard will offer to install it for you. To install it manually:
+Both Imp and Sovereign use Ollama to run the AI model locally on your machine. If Ollama is not installed, the setup wizard will offer to install it for you. To install it manually:
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
@@ -81,7 +87,7 @@ To pull a model manually instead of through the wizard:
 
 ```bash
 ollama pull llama3          # Imp
-ollama pull qwen2.5:14b     # Demon — adjust tag to match your RAM
+ollama pull qwen2.5:14b     # Sovereign — adjust tag to match your RAM
 ```
 
 Ollama resumes interrupted downloads, so if a large model download fails partway through, simply run the pull command again.
